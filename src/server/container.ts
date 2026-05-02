@@ -20,16 +20,36 @@ export type Container = {
   storage: StoragePort;
 };
 
-// 現状 prod adapter は未実装。mode === "prod" は将来差し替える。
+/**
+ * prod アダプタが未実装の間は throw する placeholder を生成する。
+ * APP_MODE=prod で立ち上げると各アダプタへの最初のアクセス時に落ちるため
+ * silent fail を防ぐ (Critical 指摘 H-2 対応)。
+ *
+ * Phase 4 で Vercel 環境変数が整ったら各 placeholder を
+ * src/server/adapters/prod/* の実装に差し替える。
+ */
+function notImplementedAdapter<T extends object>(name: string): T {
+  return new Proxy({} as T, {
+    get(_target, prop) {
+      throw new Error(
+        `[Phase4] ${name}.${String(prop)} prod adapter is not implemented yet. ` +
+          "Set APP_MODE=stub for local development, or implement the prod adapter.",
+      );
+    },
+  });
+}
+
+const prodContainer: Container = {
+  auth: notImplementedAdapter<AuthPort>("auth"),
+  audit: notImplementedAdapter<AuditPort>("audit"),
+  logger: notImplementedAdapter<LoggerPort>("logger"),
+  mail: notImplementedAdapter<MailPort>("mail"),
+  storage: notImplementedAdapter<StoragePort>("storage"),
+};
+
 export const container: Container =
   mode === "prod"
-    ? {
-        auth: stubAuth,
-        audit: stubAudit,
-        logger: stubLogger,
-        mail: stubMail,
-        storage: stubStorage,
-      }
+    ? prodContainer
     : {
         auth: stubAuth,
         audit: stubAudit,
