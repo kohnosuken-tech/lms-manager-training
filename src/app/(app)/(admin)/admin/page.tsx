@@ -1,7 +1,7 @@
 import Link from "next/link";
+import { Users, BookOpen, FileQuestion, LayoutDashboard, ScrollText } from "lucide-react";
 import {
   Card,
-  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -12,7 +12,7 @@ import { prisma } from "@/server/repositories/db";
 export const metadata = { title: "管理画面 | LMS" };
 
 export default async function AdminPage() {
-  await requireAdmin();
+  const admin = await requireAdmin();
 
   const [userCount, courseCount, incompleteCount] = await Promise.all([
     prisma.user.count(),
@@ -20,81 +20,90 @@ export default async function AdminPage() {
     prisma.enrollment.count({ where: { completedAt: null } }),
   ]);
 
-  const links: { href: string; title: string; desc: string }[] = [
+  const links = [
     {
       href: "/admin/users",
       title: "ユーザー管理",
       desc: "受講者・管理者の一覧と CSV 一括登録",
+      icon: Users,
     },
     {
       href: "/admin/courses",
       title: "コース / 教材管理",
       desc: "コース、レッスン、動画アップロード",
+      icon: BookOpen,
     },
     {
       href: "/admin/tests",
       title: "テスト管理",
       desc: "確認テスト、採点設定",
+      icon: FileQuestion,
     },
     {
       href: "/admin/dashboard",
       title: "進捗ダッシュボード",
       desc: "受講率、合格率、CSV エクスポート",
+      icon: LayoutDashboard,
     },
     {
       href: "/admin/audit",
       title: "監査ログ",
       desc: "管理操作の履歴を時系列で確認",
+      icon: ScrollText,
     },
-  ];
+  ] as const;
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold">管理ダッシュボード</h1>
-        <p className="text-sm text-muted-foreground">
-          現在の登録状況を表示しています。
+        <h1 className="text-2xl font-semibold tracking-tight">管理ダッシュボード</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {admin.name} さん、ようこそ。現在の登録状況です。
         </p>
       </div>
 
+      {/* KPI */}
       <div className="grid gap-4 sm:grid-cols-3">
-        <Card>
-          <CardHeader>
+        <Card className="rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
             <CardDescription>ユーザー総数</CardDescription>
-            <CardTitle className="text-3xl">{userCount}</CardTitle>
+            <CardTitle className="text-3xl font-bold">{userCount}</CardTitle>
           </CardHeader>
         </Card>
-        <Card>
-          <CardHeader>
+        <Card className="rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
             <CardDescription>コース総数</CardDescription>
-            <CardTitle className="text-3xl">{courseCount}</CardTitle>
+            <CardTitle className="text-3xl font-bold">{courseCount}</CardTitle>
           </CardHeader>
         </Card>
-        <Card>
-          <CardHeader>
+        <Card className="rounded-xl shadow-sm">
+          <CardHeader className="pb-2">
             <CardDescription>未完了 Enrollment</CardDescription>
-            <CardTitle className="text-3xl">{incompleteCount}</CardTitle>
+            <CardTitle className="text-3xl font-bold">{incompleteCount}</CardTitle>
           </CardHeader>
         </Card>
       </div>
 
+      {/* クイックリンク */}
       <section className="space-y-3">
-        <h2 className="text-lg font-medium">管理機能</h2>
+        <h2 className="text-base font-semibold">管理機能</h2>
         <div className="grid gap-3 sm:grid-cols-2">
-          {links.map((l) => (
-            <Link
-              key={l.href}
-              href={l.href}
-              className="block rounded-lg focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              <Card className="h-full transition-colors hover:bg-accent/40">
+          {links.map((l) => {
+            const Icon = l.icon;
+            return (
+              <Card key={l.href} className="h-full rounded-xl shadow-sm">
                 <CardHeader>
-                  <CardTitle className="text-base">{l.title}</CardTitle>
-                  <CardDescription>{l.desc}</CardDescription>
+                  <div className="rounded-lg bg-primary/10 p-2 w-fit">
+                    <Icon className="size-4 text-primary" aria-hidden="true" />
+                  </div>
+                  <CardTitle className="mt-3 text-sm font-semibold">
+                    {l.title}
+                  </CardTitle>
+                  <CardDescription className="text-xs">{l.desc}</CardDescription>
                 </CardHeader>
               </Card>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

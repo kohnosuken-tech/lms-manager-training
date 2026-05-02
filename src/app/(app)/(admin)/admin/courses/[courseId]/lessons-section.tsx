@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,10 +15,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  createLessonAction,
+  createLessonServerAction,
   deleteLessonAction,
   updateLessonAction,
-  type CreateLessonActionState,
 } from "./lesson-actions";
 import { VideoUploadField } from "./video-upload-field";
 
@@ -32,8 +32,6 @@ type Lesson = {
   requiredCompletionRate: number | null;
 };
 
-const initialCreate: CreateLessonActionState = {};
-
 export function LessonsSection({
   courseId,
   lessons,
@@ -41,16 +39,11 @@ export function LessonsSection({
   courseId: string;
   lessons: Lesson[];
 }) {
-  const [createState, createAction, creating] = useActionState(
-    createLessonAction,
-    initialCreate,
-  );
-
   return (
     <div className="space-y-4 rounded-lg border bg-card p-4">
       <h2 className="text-base font-medium">レッスン</h2>
 
-      <form action={createAction} className="space-y-2 rounded-md border p-3">
+      <form action={createLessonServerAction} noValidate className="space-y-2 rounded-md border p-3">
         <input type="hidden" name="courseId" value={courseId} />
         <div className="grid gap-2 md:grid-cols-4">
           <div className="space-y-1 md:col-span-2">
@@ -59,7 +52,6 @@ export function LessonsSection({
               id="new-lesson-title"
               name="title"
               required
-              defaultValue={createState?.values?.title ?? ""}
             />
           </div>
           <div className="space-y-1">
@@ -69,7 +61,7 @@ export function LessonsSection({
               name="durationSec"
               type="number"
               min={0}
-              defaultValue={createState?.values?.durationSec ?? "600"}
+              defaultValue="600"
             />
           </div>
           <div className="space-y-1">
@@ -79,7 +71,7 @@ export function LessonsSection({
               name="order"
               type="number"
               min={0}
-              defaultValue={createState?.values?.order ?? String(lessons.length)}
+              defaultValue={String(lessons.length)}
             />
           </div>
         </div>
@@ -87,8 +79,7 @@ export function LessonsSection({
           <div className="space-y-1 md:col-span-2">
             <VideoUploadField
               name="videoUrl"
-              defaultValue={createState?.values?.videoUrl ?? "/sample.mp4"}
-              disabled={creating}
+              defaultValue="/sample.mp4"
             />
           </div>
           <div className="space-y-1">
@@ -110,7 +101,6 @@ export function LessonsSection({
             id="new-lesson-desc"
             name="description"
             rows={2}
-            defaultValue={createState?.values?.description ?? ""}
           />
         </div>
         <div className="flex items-center gap-3">
@@ -118,16 +108,8 @@ export function LessonsSection({
             <input type="checkbox" name="blockSeek" />
             早送り抑止
           </label>
-          {createState?.error ? (
-            <span className="text-sm text-destructive">{createState.error}</span>
-          ) : null}
-          {createState?.successMessage ? (
-            <span className="text-sm text-emerald-700">
-              {createState.successMessage}
-            </span>
-          ) : null}
-          <Button type="submit" size="sm" disabled={creating} className="ml-auto">
-            {creating ? "追加中..." : "レッスン追加"}
+          <Button type="submit" size="sm" className="ml-auto">
+            レッスン追加
           </Button>
         </div>
       </form>
@@ -162,6 +144,7 @@ export function LessonsSection({
 }
 
 function LessonRow({ lesson, courseId }: { lesson: Lesson; courseId: string }) {
+  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -174,6 +157,7 @@ function LessonRow({ lesson, courseId }: { lesson: Lesson; courseId: string }) {
       if (r.ok) {
         setEditing(false);
         setError(null);
+        router.refresh();
       } else {
         setError(r.error.message);
       }
@@ -187,7 +171,11 @@ function LessonRow({ lesson, courseId }: { lesson: Lesson; courseId: string }) {
     fd.set("courseId", courseId);
     start(async () => {
       const r = await deleteLessonAction(fd);
-      if (!r.ok) setError(r.error.message);
+      if (r.ok) {
+        router.refresh();
+      } else {
+        setError(r.error.message);
+      }
     });
   };
 
@@ -232,7 +220,7 @@ function LessonRow({ lesson, courseId }: { lesson: Lesson; courseId: string }) {
   return (
     <TableRow>
       <TableCell colSpan={7}>
-        <form action={onSave} className="space-y-2 py-2">
+        <form action={onSave} noValidate className="space-y-2 py-2">
           <div className="grid gap-2 md:grid-cols-4">
             <div className="space-y-1">
               <Label htmlFor={`order-${lesson.id}`}>順</Label>

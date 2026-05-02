@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/server/auth";
 import { getSubmissionForResult } from "@/server/services/test";
-import { startTestAction } from "@/app/(app)/tests/[testId]/actions";
+import { startTestAction } from "@/app/(app)/(student)/tests/[testId]/actions";
 import { AppError } from "@/lib/errors";
 
 type Params = { submissionId: string };

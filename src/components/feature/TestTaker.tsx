@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { submitTestAction } from "@/app/(app)/tests/[testId]/actions";
+import { submitTestAction } from "@/app/(app)/(student)/tests/[testId]/actions";
 
 export type TestTakerQuestion = {
   id: string;

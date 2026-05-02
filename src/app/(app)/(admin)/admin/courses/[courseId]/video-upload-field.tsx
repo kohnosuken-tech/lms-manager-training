@@ -273,6 +273,7 @@ export function VideoUploadField({
               <input
                 ref={fileInputRef}
                 id={`${fieldId}-file`}
+                name={`${fieldId}-file-picker`}
                 type="file"
                 accept="video/mp4"
                 className="sr-only"

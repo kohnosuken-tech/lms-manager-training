@@ -59,7 +59,7 @@ vi.mock("@/components/ui/select", () => {
   };
 });
 
-import { AuditActionFilter } from "@/app/(app)/admin/audit/audit-action-filter";
+import { AuditActionFilter } from "@/app/(app)/(admin)/admin/audit/audit-action-filter";
 import userEvent from "@testing-library/user-event";
 
 describe("AuditActionFilter", () => {

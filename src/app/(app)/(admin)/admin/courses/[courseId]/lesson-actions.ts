@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireAdmin } from "@/server/auth";
 import {
@@ -156,4 +157,45 @@ export async function deleteLessonAction(
     if (e instanceof AppError) return err(e.code, e.message);
     return err("INTERNAL", "削除に失敗しました。");
   }
+}
+
+/**
+ * フォーム action として直接バインドされる Server Action。
+ * 成功時は redirect() で同一ページにリダイレクト (RSC が再実行され新レッスンが表示される)。
+ * バリデーションエラー時はサーバーエラーを throw (ブラウザのエラーバウンダリで表示される)。
+ */
+export async function createLessonServerAction(formData: FormData) {
+  const actor = await requireAdmin();
+  const raw = {
+    courseId: String(formData.get("courseId") ?? ""),
+    title: String(formData.get("title") ?? "").trim(),
+    description: String(formData.get("description") ?? ""),
+    videoUrl: String(formData.get("videoUrl") ?? "/sample.mp4"),
+    durationSec: String(formData.get("durationSec") ?? "0"),
+    order: String(formData.get("order") ?? "0"),
+    blockSeek: String(formData.get("blockSeek") ?? ""),
+    requiredCompletionRate: String(formData.get("requiredCompletionRate") ?? ""),
+  };
+  const parsed = CreateSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("入力値が不正です。");
+  }
+
+  await createLesson(actor.id, {
+    courseId: parsed.data.courseId,
+    title: parsed.data.title,
+    description: parsed.data.description,
+    videoUrl: parsed.data.videoUrl,
+    durationSec: parsed.data.durationSec,
+    order: parsed.data.order,
+    blockSeek: parsed.data.blockSeek === "on" || parsed.data.blockSeek === "true",
+    requiredCompletionRate:
+      parsed.data.requiredCompletionRate === "" ||
+      parsed.data.requiredCompletionRate === undefined
+        ? null
+        : parsed.data.requiredCompletionRate,
+  });
+
+  revalidatePath(`/admin/courses/${parsed.data.courseId}`);
+  redirect(`/admin/courses/${parsed.data.courseId}`);
 }
