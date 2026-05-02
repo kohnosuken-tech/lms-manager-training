@@ -10,18 +10,12 @@ import {
 } from "@/server/services/course";
 import { AppError } from "@/lib/errors";
 import { ok, err, type ApiResult } from "@/lib/result";
+import { isValidVideoUrl } from "@/lib/video-source";
 
-const VideoUrlSchema = z.union([
-  z.literal("/sample.mp4"),
-  z.string().regex(
-    /^\/uploads\/[\w.\-]+\.mp4$/,
-    "videoUrl は /sample.mp4、/uploads/... または Vercel Blob URL のみ許可されます。",
-  ),
-  z.string().url().refine(
-    (u) => /^https:\/\/[\w.-]+\.public\.blob\.vercel-storage\.com\//.test(u),
-    { message: "videoUrl は /sample.mp4、/uploads/... または Vercel Blob URL のみ許可されます。" },
-  ),
-]);
+const VideoUrlSchema = z.string().refine(isValidVideoUrl, {
+  message:
+    "videoUrl は /sample.mp4、/uploads/<key>.mp4、Vercel Blob、YouTube URL のいずれかである必要があります。",
+});
 
 const CreateSchema = z.object({
   courseId: z.string().min(1),

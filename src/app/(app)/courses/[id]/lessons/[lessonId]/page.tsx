@@ -96,13 +96,13 @@ export default async function LessonPage({
         <CardContent>
           <VideoPlayer
             lessonId={lesson.id}
-            src={lesson.videoUrl}
+            videoUrl={lesson.videoUrl}
             durationSec={lesson.durationSec}
             blockSeek={lesson.blockSeek}
-            initialPositionSec={progress?.lastPositionSec ?? 0}
+            initialLastPositionSec={progress?.lastPositionSec ?? 0}
             initialWatchedSec={progress?.watchedSec ?? 0}
             requiredCompletionRate={requiredRate}
-            initiallyCompleted={progress?.completed ?? false}
+            initialCompleted={progress?.completed ?? false}
             simulateEnabled={simulateEnabled}
           />
         </CardContent>

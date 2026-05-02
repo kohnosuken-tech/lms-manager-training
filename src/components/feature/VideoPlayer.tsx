@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { parseVideoSource } from "@/lib/video-source";
+import { YouTubePlayer } from "./YouTubePlayer";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 const SAVE_INTERVAL_MS = 10_000;
@@ -9,14 +11,15 @@ const SEEK_TOLERANCE_SEC = 5;
 
 export type VideoPlayerProps = {
   lessonId: string;
-  src: string;
+  videoUrl: string;
   durationSec: number;
   blockSeek: boolean;
-  initialPositionSec: number;
-  initialWatchedSec: number;
-  requiredCompletionRate: number;
-  initiallyCompleted: boolean;
-  simulateEnabled: boolean;
+  requiredCompletionRate?: number | null;
+  initialWatchedSec?: number;
+  initialLastPositionSec?: number;
+  initialCompleted?: boolean;
+  // 後方互換: mock シミュレートモード
+  simulateEnabled?: boolean;
 };
 
 type SaveResponse =
@@ -30,19 +33,33 @@ function formatTime(sec: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-export function VideoPlayer(props: VideoPlayerProps) {
-  const {
-    lessonId,
-    src,
-    durationSec,
-    blockSeek,
-    initialPositionSec,
-    initialWatchedSec,
-    requiredCompletionRate,
-    initiallyCompleted,
-    simulateEnabled,
-  } = props;
+// ---------------------------------------------------------------------------
+// FILE 動画専用コンポーネント (既存ロジックをそのまま維持)
+// ---------------------------------------------------------------------------
 
+type FileVideoPlayerProps = {
+  lessonId: string;
+  src: string;
+  durationSec: number;
+  blockSeek: boolean;
+  initialPositionSec: number;
+  initialWatchedSec: number;
+  requiredCompletionRate: number;
+  initiallyCompleted: boolean;
+  simulateEnabled: boolean;
+};
+
+function FileVideoPlayer({
+  lessonId,
+  src,
+  durationSec,
+  blockSeek,
+  initialPositionSec,
+  initialWatchedSec,
+  requiredCompletionRate,
+  initiallyCompleted,
+  simulateEnabled,
+}: FileVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [rate, setRate] = useState<number>(1);
@@ -71,10 +88,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
       opts?: { keepalive?: boolean },
     ): Promise<void> => {
       // 同値なら送らない
-      if (
-        w === lastSentRef.current.w &&
-        p === lastSentRef.current.p
-      ) {
+      if (w === lastSentRef.current.w && p === lastSentRef.current.p) {
         return;
       }
       try {
@@ -97,7 +111,10 @@ export function VideoPlayer(props: VideoPlayerProps) {
             // 強制巻き戻し
             const v = videoRef.current;
             if (v) {
-              const target = Math.min(maxAllowedPositionRef.current, v.duration || 0);
+              const target = Math.min(
+                maxAllowedPositionRef.current,
+                v.duration || 0,
+              );
               v.currentTime = Math.max(0, target);
               setCurrentTime(target);
             }
@@ -137,7 +154,6 @@ export function VideoPlayer(props: VideoPlayerProps) {
       if (dirtyRef.current) {
         const w = watchedSec;
         const p = currentTime;
-        // beacon 風に keepalive で送る
         void saveProgress(w, p, { keepalive: true });
       }
     };
@@ -157,10 +173,9 @@ export function VideoPlayer(props: VideoPlayerProps) {
     const t = v.currentTime;
     // watchedSec は単調増加: 前回より進んだ分だけ加算
     setWatchedSec((prev) => {
-      const delta = Math.max(0, t - (lastSentRef.current.p));
+      const delta = Math.max(0, t - lastSentRef.current.p);
       // 大きすぎるジャンプ (シーク) は無視
       const clamped = delta > 2 ? 0 : delta;
-      // ただし定常的な増加は currentTime 経由で別管理
       return Math.max(prev, prev + clamped);
     });
     setCurrentTime(t);
@@ -232,8 +247,6 @@ export function VideoPlayer(props: VideoPlayerProps) {
     return () => window.clearInterval(interval);
   }, [simulating, durationSec]);
 
-  // シミュレート中は10秒ごとの保存トリガを有効にする (上の useEffect で playing|simulating が条件)
-  // シミュレートで durationSec に達したら自動停止 + 保存
   useEffect(() => {
     if (simulating && watchedSec >= durationSec && durationSec > 0) {
       setSimulating(false);
@@ -335,6 +348,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
         <div
           className="h-2 w-full overflow-hidden rounded-full bg-muted"
           role="progressbar"
+          aria-label="累積視聴進捗"
           aria-valuenow={ratioPct}
           aria-valuemin={0}
           aria-valuemax={100}
@@ -364,5 +378,64 @@ export function VideoPlayer(props: VideoPlayerProps) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 公開コンポーネント: videoUrl を受け取り FILE / YOUTUBE を振り分ける
+// ---------------------------------------------------------------------------
+
+export function VideoPlayer({
+  lessonId,
+  videoUrl,
+  durationSec,
+  blockSeek,
+  requiredCompletionRate,
+  initialWatchedSec = 0,
+  initialLastPositionSec = 0,
+  initialCompleted = false,
+  simulateEnabled = false,
+}: VideoPlayerProps) {
+  const source = parseVideoSource(videoUrl);
+  const resolvedRate = requiredCompletionRate ?? 0.95;
+
+  if (source === null) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        動画 URL が不正です。管理者に連絡してください。
+        <span className="ml-2 font-mono text-xs opacity-70">{videoUrl}</span>
+      </div>
+    );
+  }
+
+  if (source.type === "YOUTUBE") {
+    return (
+      <YouTubePlayer
+        lessonId={lessonId}
+        videoId={source.videoId}
+        embedUrl={source.embedUrl}
+        durationSec={durationSec}
+        blockSeek={blockSeek}
+        requiredCompletionRate={resolvedRate}
+        initialWatchedSec={initialWatchedSec}
+        initialLastPositionSec={initialLastPositionSec}
+        initialCompleted={initialCompleted}
+      />
+    );
+  }
+
+  // source.type === "FILE"
+  return (
+    <FileVideoPlayer
+      lessonId={lessonId}
+      src={source.url}
+      durationSec={durationSec}
+      blockSeek={blockSeek}
+      initialPositionSec={initialLastPositionSec}
+      initialWatchedSec={initialWatchedSec}
+      requiredCompletionRate={resolvedRate}
+      initiallyCompleted={initialCompleted}
+      simulateEnabled={simulateEnabled}
+    />
   );
 }
