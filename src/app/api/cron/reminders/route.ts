@@ -1,7 +1,14 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
 import { ok, err } from "@/lib/result";
+
+/** タイミング攻撃を防ぐ文字列比較 (長さが異なれば即 false) */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 // 7 日前ウィンドウ: ±12h (日次 cron を想定した重複送信回避)
 const DAYS_BEFORE = 7;
@@ -20,7 +27,7 @@ export async function POST(req: Request) {
 
   const authHeader = req.headers.get("Authorization") ?? "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
-  if (token !== cronSecret) {
+  if (!safeEqual(token, cronSecret)) {
     container.logger.warn("cron.reminders.unauthorized", {});
     return NextResponse.json(
       err("UNAUTHENTICATED", "認証に失敗しました。"),

@@ -1,5 +1,9 @@
 import { PrismaClient, type Prisma } from "@prisma/client";
 
+if (process.env.NODE_ENV === "production" && !process.env.ALLOW_PROD_SEED) {
+  throw new Error("seed forbidden in production");
+}
+
 const prisma = new PrismaClient();
 
 async function reset() {

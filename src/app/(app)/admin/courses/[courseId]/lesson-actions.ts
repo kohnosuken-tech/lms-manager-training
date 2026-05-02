@@ -11,11 +11,19 @@ import {
 import { AppError } from "@/lib/errors";
 import { ok, err, type ApiResult } from "@/lib/result";
 
+const VideoUrlSchema = z.union([
+  z.literal("/sample.mp4"),
+  z.string().url().refine(
+    (u) => /^https:\/\/[\w.-]+\.public\.blob\.vercel-storage\.com\//.test(u),
+    { message: "videoUrl は /sample.mp4 または Vercel Blob URL のみ許可されます。" },
+  ),
+]);
+
 const CreateSchema = z.object({
   courseId: z.string().min(1),
   title: z.string().min(1).max(200),
   description: z.string().max(1000).default(""),
-  videoUrl: z.string().min(1).default("/sample.mp4"),
+  videoUrl: VideoUrlSchema.default("/sample.mp4"),
   durationSec: z.coerce.number().int().min(0),
   order: z.coerce.number().int().min(0),
   blockSeek: z
@@ -80,7 +88,7 @@ const UpdateSchema = z.object({
   courseId: z.string().min(1),
   title: z.string().min(1).max(200),
   description: z.string().max(1000),
-  videoUrl: z.string().min(1),
+  videoUrl: VideoUrlSchema,
   durationSec: z.coerce.number().int().min(0),
   order: z.coerce.number().int().min(0),
   blockSeek: z.enum(["true", "false"]),

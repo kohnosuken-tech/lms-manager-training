@@ -9,10 +9,18 @@ import { prisma } from "@/server/repositories/db";
 
 // ---------- 共通ヘルパー ----------
 
-/** CSV セルをクォート (ダブルクォート内のダブルクォートはエスケープ) */
+/** CSV セルをクォート (ダブルクォート内のダブルクォートはエスケープ)
+ *
+ * CSV インジェクション対策: 値の先頭が数式トリガー文字 (=, +, -, @, TAB, CR) の場合は
+ * シングルクォートをプレフィクスとして付加してからクォート処理する。
+ */
 function csvCell(value: string | number | boolean | null | undefined): string {
   if (value === null || value === undefined) return "";
-  const str = String(value);
+  let str = String(value);
+  // CSV インジェクション対策
+  if (str.length > 0 && /^[=+\-@\t\r]/.test(str)) {
+    str = "'" + str;
+  }
   // カンマ、改行、ダブルクォートを含む場合はダブルクォートで囲む
   if (str.includes(",") || str.includes("\n") || str.includes('"')) {
     return `"${str.replace(/"/g, '""')}"`;

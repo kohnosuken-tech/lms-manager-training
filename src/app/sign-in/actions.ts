@@ -33,11 +33,15 @@ export async function signInAction(
 
   const result = await container.auth.signIn(parsed.data);
   if (!result.ok) {
-    const msg =
-      result.code === "DEACTIVATED"
-        ? "アカウントが無効化されています。管理者に連絡してください。"
-        : "メールアドレスまたはパスワードが正しくありません。";
-    return { error: msg, values: { email: raw.email } };
+    // audit log では失敗理由を区別して記録する (ユーザー列挙対策のためUIメッセージは統一)
+    container.logger.info("auth.sign_in.failed", {
+      email: parsed.data.email,
+      reason: result.code,
+    });
+    return {
+      error: "メールアドレスまたはパスワードが正しくありません。",
+      values: { email: raw.email },
+    };
   }
 
   redirect("/dashboard");

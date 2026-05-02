@@ -64,7 +64,7 @@ export async function createUserAction(
   }
 }
 
-const BulkSchema = z.object({ csv: z.string().min(1) });
+const BulkSchema = z.object({ csv: z.string().min(1).max(64_000) });
 
 export type BulkCreateUsersActionState = {
   error?: string;

@@ -97,6 +97,9 @@ export async function bulkCreateUsers(
       422,
     );
   }
+  if (lines.length - 1 > 200) {
+    throw new AppError("VALIDATION_FAILED", "一度に登録できるのは 200 件までです。", 422);
+  }
 
   const errors: BulkCreateUsersResult["errors"] = [];
   let created = 0;
