@@ -61,3 +61,7 @@
 
 ## 6. 確定事項 — 詳細は `docs/decisions.md` を参照
 Phase 1 で 6 項目 (認証 / 動画 / テスト / メール / 集計 / 完了率判定) を確定済み。各項目のモック挙動・本番挙動・切替手順は `docs/decisions.md` にまとまっている。
+
+## 7. 教材定義データの管理基盤 (2026-05-02 追記)
+Course / Lesson / Test / Question / Choice の **教材定義データ** は Google Spreadsheet を Source of Truth とし、LMS からは GAS Web App をリレー経由でアクセスする。詳細は ADR 0003 / 0004 / 0005 と `docs/architecture.md` §8〜§10、ユーザー向け手順書は `docs/deployment-gas.md` を参照。
+受講履歴系 (User / Enrollment / Progress / Submission / Answer / AuditLog / MailDelivery) は引き続きリレーショナル DB (mock = SQLite, 本番 = Neon Postgres) に置く。
