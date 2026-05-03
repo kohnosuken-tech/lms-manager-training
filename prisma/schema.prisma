@@ -238,6 +238,8 @@ model AuditLog {
   target    String?     // 対象エンティティの参照 (例: "Course:abc123")
   diff      String      @default("") // JSON 文字列。zod でパースして利用
   at        DateTime    @default(now())
+  prevHash  String?     // 直前のレコードの hash (最初のレコードは null)
+  hash      String      @default("") // このレコード自体の SHA-256 hex
 
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
 
