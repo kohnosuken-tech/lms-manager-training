@@ -6,6 +6,7 @@ import type { AuditPort } from "./ports/audit";
 import type { LoggerPort } from "./ports/logger";
 import type { MailPort } from "./ports/mail";
 import type { StoragePort } from "./ports/storage";
+import type { CmsPort } from "./ports/cms";
 
 import { stubAuth } from "./adapters/stub/auth";
 import { stubAudit } from "./adapters/stub/audit";
@@ -13,7 +14,13 @@ import { stubLogger } from "./adapters/stub/logger";
 import { stubMail } from "./adapters/stub/mail";
 import { stubStorage } from "./adapters/stub/storage";
 
+import { sqliteCms } from "./adapters/sqlite/cms";
+import { spreadsheetCms } from "./adapters/spreadsheet/cms";
+import { gasMail } from "./adapters/spreadsheet/mail";
+
 const mode = process.env.APP_MODE ?? "stub";
+const cmsSource = process.env.CMS_SOURCE ?? "sqlite"; // "sqlite" | "spreadsheet"
+const mailDriver = process.env.MAIL_DRIVER ?? "stub"; // "stub" | "gas"
 
 export type Container = {
   auth: AuthPort;
@@ -21,6 +28,7 @@ export type Container = {
   logger: LoggerPort;
   mail: MailPort;
   storage: StoragePort;
+  cms: CmsPort;
 };
 
 /**
@@ -42,12 +50,23 @@ function notImplementedAdapter<T extends object>(name: string): T {
   });
 }
 
+const cms: CmsPort =
+  cmsSource === "spreadsheet" ? spreadsheetCms : sqliteCms;
+
+const mail: MailPort =
+  mode === "prod"
+    ? notImplementedAdapter<MailPort>("mail")
+    : mailDriver === "gas"
+      ? gasMail
+      : stubMail;
+
 const prodContainer: Container = {
   auth: notImplementedAdapter<AuthPort>("auth"),
   audit: notImplementedAdapter<AuditPort>("audit"),
   logger: notImplementedAdapter<LoggerPort>("logger"),
   mail: notImplementedAdapter<MailPort>("mail"),
   storage: notImplementedAdapter<StoragePort>("storage"),
+  cms,
 };
 
 export const container: Container =
@@ -57,6 +76,7 @@ export const container: Container =
         auth: stubAuth,
         audit: stubAudit,
         logger: stubLogger,
-        mail: stubMail,
+        mail,
         storage: stubStorage,
+        cms,
       };

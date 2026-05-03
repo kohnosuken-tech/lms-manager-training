@@ -198,8 +198,12 @@ function extractHeaderId_(label) {
   return String(label).split(/\s|\(/)[0].trim();
 }
 function headerOf_(e, name) {
-  if (e && e.parameter && e.parameter[name]) return e.parameter[name];
-  if (e && e.parameter && e.parameter[name.toLowerCase()]) return e.parameter[name.toLowerCase()];
+  if (!e || !e.parameter) return null;
+  if (e.parameter[name]) return e.parameter[name];
+  if (e.parameter[name.toLowerCase()]) return e.parameter[name.toLowerCase()];
+  // 短縮形: GAS は HTTP ヘッダを受け取れないため、LMS adapter は ?ts= / ?sig= も併送する
+  if (name === "X-Timestamp" && e.parameter.ts) return e.parameter.ts;
+  if (name === "X-Signature" && e.parameter.sig) return e.parameter.sig;
   return null;
 }
 function jsonOut_(obj) {
