@@ -153,4 +153,24 @@ export const sqliteCms: CmsPort = {
       updatedAt: now,
     }));
   },
+
+  async getCourse(id: string): Promise<Course | null> {
+    const all = await sqliteCms.listCourses();
+    return all.find((c) => c.id === id) ?? null;
+  },
+
+  async getLesson(id: string): Promise<Lesson | null> {
+    const all = await sqliteCms.listLessons();
+    return all.find((l) => l.id === id) ?? null;
+  },
+
+  async getTest(id: string): Promise<Test | null> {
+    const all = await sqliteCms.listTests();
+    return all.find((t) => t.id === id) ?? null;
+  },
+
+  async getQuestion(id: string): Promise<Question | null> {
+    const all = await sqliteCms.listQuestions();
+    return all.find((q) => q.id === id) ?? null;
+  },
 };

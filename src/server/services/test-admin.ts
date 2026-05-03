@@ -2,8 +2,21 @@ import type { QuestionType } from "@prisma/client";
 import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
 import { AppError } from "@/lib/errors";
+import type { CmsPort } from "@/server/ports/cms";
 
-// ---------- Test ----------
+// ---------- write 系ガード ----------
+
+function assertWriteAllowed(): void {
+  if (process.env.CMS_SOURCE === "spreadsheet") {
+    throw new AppError(
+      "WRITE_NOT_SUPPORTED",
+      "Spreadsheet モードでは管理画面から教材を編集できません。Spreadsheet で直接編集してください。",
+      422,
+    );
+  }
+}
+
+// ---------- Test write ----------
 
 export type CreateTestInput = {
   courseId: string;
@@ -19,6 +32,7 @@ export async function createTest(
   actorId: string,
   input: CreateTestInput,
 ): Promise<{ testId: string }> {
+  assertWriteAllowed();
   if (input.title.trim().length === 0) {
     throw new AppError("VALIDATION_FAILED", "タイトルを入力してください。", 422);
   }
@@ -28,6 +42,7 @@ export async function createTest(
   if (input.maxAttempts < 1) {
     throw new AppError("VALIDATION_FAILED", "受験回数上限は 1 以上で指定してください。", 422);
   }
+  // write 系は Prisma で Course 存在確認 (spreadsheet モードはガードで弾かれる)
   const course = await prisma.course.findUnique({
     where: { id: input.courseId },
     select: { id: true },
@@ -69,6 +84,7 @@ export async function updateTest(
   actorId: string,
   input: UpdateTestInput,
 ): Promise<void> {
+  assertWriteAllowed();
   const before = await prisma.test.findUnique({ where: { id: input.id } });
   if (!before) throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
 
@@ -106,6 +122,8 @@ export async function publishTest(
   id: string,
   published: boolean,
 ): Promise<void> {
+  assertWriteAllowed();
+  // write 系は Prisma で Test 存在確認 (spreadsheet モードはガードで弾かれる)
   const before = await prisma.test.findUnique({
     where: { id },
     select: { id: true, published: true, questions: { select: { id: true } } },
@@ -127,7 +145,7 @@ export async function publishTest(
   });
 }
 
-// ---------- Question ----------
+// ---------- Question write ----------
 
 export type ChoiceInput = {
   label: string;
@@ -183,16 +201,20 @@ export async function addQuestion(
   actorId: string,
   input: AddQuestionInput,
 ): Promise<{ questionId: string }> {
+  assertWriteAllowed();
   if (input.prompt.trim().length === 0) {
     throw new AppError("VALIDATION_FAILED", "設問文を入力してください。", 422);
   }
   validateQuestionShape(input.type, input.choices);
 
+  // write 系は Prisma で Test 存在確認 (spreadsheet モードはガードで弾かれる)
   const test = await prisma.test.findUnique({
     where: { id: input.testId },
     select: { id: true, _count: { select: { questions: true } } },
   });
   if (!test) throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
+
+  const existingCount = test._count.questions;
 
   const question = await prisma.question.create({
     data: {
@@ -200,7 +222,7 @@ export async function addQuestion(
       type: input.type,
       prompt: input.prompt.trim(),
       explanation: input.explanation.trim(),
-      order: test._count.questions,
+      order: existingCount,
       choices: {
         create: input.choices.map((c, i) => ({
           label: c.label.trim(),
@@ -233,6 +255,7 @@ export async function updateQuestion(
   actorId: string,
   input: UpdateQuestionInput,
 ): Promise<void> {
+  assertWriteAllowed();
   if (input.prompt.trim().length === 0) {
     throw new AppError("VALIDATION_FAILED", "設問文を入力してください。", 422);
   }
@@ -290,6 +313,7 @@ export async function deleteQuestion(
   actorId: string,
   input: DeleteQuestionInput,
 ): Promise<void> {
+  assertWriteAllowed();
   const before = await prisma.question.findUnique({
     where: { id: input.id },
     select: { id: true, testId: true },

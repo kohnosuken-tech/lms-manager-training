@@ -2,6 +2,7 @@ import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
 import { AppError } from "@/lib/errors";
 import type { Prisma, SubmissionStatus } from "@prisma/client";
+import type { CmsPort } from "@/server/ports/cms";
 
 export type StartSubmissionResult = {
   submissionId: string;
@@ -11,35 +12,42 @@ export type StartSubmissionResult = {
 /**
  * テスト受験を開始する。
  *
- * - prerequisite Course が指定されていれば完了済みかチェック
- * - 全 Lesson 完了済みかチェック
- * - attempts < maxAttempts チェック
- * - 既に IN_PROGRESS のものがあれば再利用
+ * - Test の存在確認と prerequisite チェックは CmsPort 経由
+ * - Lesson の存在確認も CmsPort 経由 (listLessons)
+ * - Enrollment / Progress / Submission は Prisma のまま
  */
 export async function startSubmission(
   userId: string,
   testId: string,
+  cms: CmsPort = container.cms,
 ): Promise<StartSubmissionResult> {
-  const test = await prisma.test.findUnique({
+  // Test の取得は CmsPort 経由
+  const cmsTest = await cms.getTest(testId);
+  if (!cmsTest) {
+    throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
+  }
+  if (!cmsTest.published) {
+    throw new AppError("NOT_FOUND", "テストが公開されていません。", 404);
+  }
+
+  // maxAttempts などの追加フィールドは Prisma から取得 (CmsPort には prerequisiteCourseId がない)
+  const dbTest = await prisma.test.findUnique({
     where: { id: testId },
     select: {
       id: true,
       courseId: true,
       maxAttempts: true,
-      published: true,
       prerequisiteCourseId: true,
     },
   });
-  if (!test) {
+  // getTest で存在確認済みなので null チェックは念のため
+  if (!dbTest) {
     throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
-  }
-  if (!test.published) {
-    throw new AppError("NOT_FOUND", "テストが公開されていません。", 404);
   }
 
   // 受講者がこの Course に Enrollment を持っているか
   const enrollment = await prisma.enrollment.findUnique({
-    where: { userId_courseId: { userId, courseId: test.courseId } },
+    where: { userId_courseId: { userId, courseId: dbTest.courseId } },
     select: { id: true },
   });
   if (!enrollment) {
@@ -50,26 +58,24 @@ export async function startSubmission(
     );
   }
 
-  // 当該 Course の全 Lesson を完了しているかチェック
-  const lessons = await prisma.lesson.findMany({
-    where: { courseId: test.courseId },
-    select: { id: true },
-  });
-  if (lessons.length === 0) {
+  // 当該 Course の全 Lesson を完了しているかチェック (Lesson 一覧は CmsPort 経由)
+  const cmsLessons = await cms.listLessons(dbTest.courseId);
+  if (cmsLessons.length === 0) {
     throw new AppError(
       "PREREQUISITE_NOT_MET",
       "受講可能なレッスンがありません。",
       422,
     );
   }
+  const lessonIds = cmsLessons.map((l) => l.id);
   const completedCount = await prisma.progress.count({
     where: {
       userId,
-      lessonId: { in: lessons.map((l) => l.id) },
+      lessonId: { in: lessonIds },
       completed: true,
     },
   });
-  if (completedCount < lessons.length) {
+  if (completedCount < cmsLessons.length) {
     throw new AppError(
       "PREREQUISITE_NOT_MET",
       "全レッスンを完了してから受験してください。",
@@ -77,17 +83,15 @@ export async function startSubmission(
     );
   }
 
-  // prerequisite Course (別コース指定がある場合)
-  if (test.prerequisiteCourseId && test.prerequisiteCourseId !== test.courseId) {
-    const preLessons = await prisma.lesson.findMany({
-      where: { courseId: test.prerequisiteCourseId },
-      select: { id: true },
-    });
+  // prerequisite Course (別コース指定がある場合) も CmsPort 経由で Lesson 一覧を取得
+  if (dbTest.prerequisiteCourseId && dbTest.prerequisiteCourseId !== dbTest.courseId) {
+    const preLessons = await cms.listLessons(dbTest.prerequisiteCourseId);
     if (preLessons.length > 0) {
+      const preLessonIds = preLessons.map((l) => l.id);
       const preCompleted = await prisma.progress.count({
         where: {
           userId,
-          lessonId: { in: preLessons.map((l) => l.id) },
+          lessonId: { in: preLessonIds },
           completed: true,
         },
       });
@@ -133,7 +137,7 @@ export async function startSubmission(
     );
   }
 
-  if (finishedAttempts >= test.maxAttempts) {
+  if (finishedAttempts >= dbTest.maxAttempts) {
     throw new AppError(
       "ATTEMPTS_EXCEEDED",
       "受験回数の上限に達しました。",
@@ -177,6 +181,9 @@ export type SubmitSubmissionResult = {
  *
  * M-4: testId を受け取り、Submission の testId と一致することを検証する。
  * 不一致の場合は NOT_FOUND を返す (IDOR / ID 混同攻撃を防ぐ)。
+ *
+ * 採点で使う Question / Choice は Submission に紐付く SQL データを参照する。
+ * (Submission/Answer/Choice は SQL に残す設計)
  */
 export async function submitSubmission(
   submissionId: string,
@@ -314,6 +321,7 @@ export async function submitSubmission(
 /**
  * 結果ページ表示用: Submission + Question + Choice + Answer を取得する。
  * アクセス権 (本人 or ADMIN) は呼び出し側で渡された role と userId で検証する。
+ * Question / Choice は Submission に紐付く SQL データを参照する (Submission は SQL 残留)。
  */
 export async function getSubmissionForResult(
   submissionId: string,

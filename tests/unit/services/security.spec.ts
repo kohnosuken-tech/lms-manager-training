@@ -25,11 +25,16 @@ import {
 import { listAuditLogs } from "@/server/services/audit";
 import { AppError } from "@/lib/errors";
 
+import { sqliteCms } from "@/server/adapters/sqlite/cms";
+
 vi.mock("@/server/container", () => ({
   container: {
     audit: { write: vi.fn().mockResolvedValue(undefined) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     mail: { send: vi.fn().mockResolvedValue(undefined) },
+    get cms() {
+      return sqliteCms;
+    },
   },
 }));
 

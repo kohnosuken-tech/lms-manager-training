@@ -62,4 +62,10 @@ export interface CmsPort {
   listTests(courseId?: string): Promise<Test[]>;
   listQuestions(testId?: string): Promise<Question[]>;
   listChoices(questionId?: string): Promise<Choice[]>;
+
+  // id ベース取得 (内部で list を呼び、キャッシュを活用)
+  getCourse(id: string): Promise<Course | null>;
+  getLesson(id: string): Promise<Lesson | null>;
+  getTest(id: string): Promise<Test | null>;
+  getQuestion(id: string): Promise<Question | null>;
 }

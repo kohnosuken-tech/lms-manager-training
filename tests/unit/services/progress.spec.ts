@@ -7,9 +7,14 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { testPrisma, resetDb } from "../../helpers/db";
 import { upsertProgress } from "@/server/services/progress";
 
+import { sqliteCms } from "@/server/adapters/sqlite/cms";
+
 vi.mock("@/server/container", () => ({
   container: {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    get cms() {
+      return sqliteCms;
+    },
   },
 }));
 
