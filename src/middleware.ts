@@ -1,4 +1,5 @@
 // Next.js Middleware — 認証・認可ガード。DB を引かず JWT payload の role だけで判定する。
+// Edge Runtime で動くため node:crypto は使えない (Web Crypto + 自前 constant-time 実装)。
 import { type NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
@@ -66,6 +67,24 @@ function forbiddenJson(message: string): NextResponse {
   );
 }
 
+/**
+ * H-3: タイミング攻撃を防ぐ文字列比較。
+ * 長さが異なる場合も固定長バッファを使って比較することで
+ * 処理時間の差異をなくす。
+ */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  // 長さが異なれば偽だが、timing leak を避けるため最大長まで必ずループする。
+  // Edge Runtime では node:crypto が使えないので Web Crypto 互換の自前実装を使う。
+  const maxLen = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < maxLen; i++) {
+    const ac = i < a.length ? a.charCodeAt(i) : 0;
+    const bc = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= ac ^ bc;
+  }
+  return diff === 0;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -83,14 +102,25 @@ export async function middleware(req: NextRequest) {
   }
 
   // ------------------------------------------------------------------
-  // /api/cron/:path* — Authorization ヘッダの存在だけ確認
-  // (値の正当性は route 内で timingSafeEqual)
+  // H-3: /api/cron/:path* — middleware で timing-safe 比較を実施
+  // CRON_SECRET 未設定なら起動時警告 (ここでは 401 を返す)
   // ------------------------------------------------------------------
   if (pathname.startsWith("/api/cron/")) {
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return unauthorizedJson("Authorization ヘッダが必要です。");
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret) {
+      // H-3: secret 未設定時は 401 + 汎用メッセージ (情報漏洩を防ぐ)
+      // ログは route handler 側でも出力するが、middleware で先行して遮断する
+      return unauthorizedJson("Unauthorized");
     }
+
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+    // H-3: timing-safe 比較で brute force / timing 攻撃を防ぐ
+    if (!timingSafeStringEqual(token, cronSecret)) {
+      return unauthorizedJson("Unauthorized");
+    }
+
     return NextResponse.next();
   }
 

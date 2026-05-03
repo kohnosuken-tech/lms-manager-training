@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
 import { AppError } from "@/lib/errors";
@@ -143,6 +144,7 @@ export async function createLesson(
 
 export type UpdateLessonInput = {
   id: string;
+  courseId: string; // H-5: 呼び出し元が所属コースを明示的に指定する
   title?: string;
   description?: string;
   videoUrl?: string;
@@ -161,6 +163,14 @@ export async function updateLesson(
   });
   if (!before) {
     throw new AppError("NOT_FOUND", "レッスンが見つかりません。", 404);
+  }
+  // H-5: lesson が指定された courseId に属することを検証
+  if (before.courseId !== input.courseId) {
+    throw new AppError(
+      "NOT_FOUND",
+      "レッスンが見つかりません。",
+      404,
+    );
   }
   await prisma.lesson.update({
     where: { id: input.id },
@@ -188,22 +198,35 @@ export async function updateLesson(
   });
 }
 
+export type DeleteLessonInput = {
+  id: string;
+  courseId: string; // H-5: 呼び出し元が所属コースを明示的に指定する
+};
+
 export async function deleteLesson(
   actorId: string,
-  id: string,
+  input: DeleteLessonInput,
 ): Promise<void> {
   const before = await prisma.lesson.findUnique({
-    where: { id },
+    where: { id: input.id },
     select: { id: true, courseId: true, title: true },
   });
   if (!before) {
     throw new AppError("NOT_FOUND", "レッスンが見つかりません。", 404);
   }
-  await prisma.lesson.delete({ where: { id } });
+  // H-5: lesson が指定された courseId に属することを検証
+  if (before.courseId !== input.courseId) {
+    throw new AppError(
+      "NOT_FOUND",
+      "レッスンが見つかりません。",
+      404,
+    );
+  }
+  await prisma.lesson.delete({ where: { id: input.id } });
   await container.audit.write({
     actorId,
     action: "LESSON_DELETE",
-    target: `Lesson:${id}`,
+    target: `Lesson:${input.id}`,
     diff: before,
   });
 }
@@ -240,6 +263,7 @@ export async function assignCourse(
         },
       });
       assigned++;
+      // H-4: ENROLLMENT_CREATE の diff も userId / courseId のみ (PII 除外)
       await container.audit.write({
         actorId,
         action: "ENROLLMENT_CREATE",
@@ -280,4 +304,47 @@ export async function unassignCourse(
     action: "ENROLLMENT_DELETE",
     target: `Enrollment:${userId}:${courseId}`,
   });
+}
+
+// ---------- クエリ拡張 (U-3 サーバー側) ----------
+
+export type ListCoursesInput = {
+  /** title 部分一致 */
+  q?: string;
+  published?: boolean;
+};
+
+export type CourseListItem = {
+  id: string;
+  title: string;
+  description: string;
+  order: number;
+  published: boolean;
+  createdAt: Date;
+  _count: { lessons: number; enrollments: number };
+};
+
+export async function listCourses(
+  input: ListCoursesInput = {},
+): Promise<CourseListItem[]> {
+  const where: Prisma.CourseWhereInput = {
+    ...(input.published !== undefined ? { published: input.published } : {}),
+    ...(input.q ? { title: { contains: input.q } } : {}),
+  };
+
+  const courses = await prisma.course.findMany({
+    where,
+    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      order: true,
+      published: true,
+      createdAt: true,
+      _count: { select: { lessons: true, enrollments: true } },
+    },
+  });
+
+  return courses;
 }

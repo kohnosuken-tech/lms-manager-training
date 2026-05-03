@@ -15,12 +15,13 @@ const DAYS_BEFORE = 7;
 const WINDOW_H = 12;
 
 export async function POST(req: Request) {
-  // Bearer token 認可
+  // H-3: Bearer token 認可 (主な検証は middleware で実施済み。ここは二重防御)
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
+    // H-3: secret 未設定時は汎用メッセージのみ (詳細は logger に出力)
     container.logger.warn("cron.reminders.secret_missing", {});
     return NextResponse.json(
-      err("UNAUTHENTICATED", "CRON_SECRET が設定されていません。"),
+      err("UNAUTHENTICATED", "Unauthorized"),
       { status: 401 },
     );
   }
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
   if (!safeEqual(token, cronSecret)) {
     container.logger.warn("cron.reminders.unauthorized", {});
     return NextResponse.json(
-      err("UNAUTHENTICATED", "認証に失敗しました。"),
+      err("UNAUTHENTICATED", "Unauthorized"),
       { status: 401 },
     );
   }

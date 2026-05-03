@@ -13,12 +13,40 @@ import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
 import { CreateCourseForm } from "./create-course-form";
+import { CoursesFilterBar } from "./courses-filter-bar";
+import type { Prisma } from "@prisma/client";
 
 export const metadata = { title: "コース管理 | LMS" };
 
-export default async function AdminCoursesPage() {
+type SearchParams = Promise<{
+  q?: string;
+  published?: string;
+}>;
+
+export default async function AdminCoursesPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
   await requireAdmin();
+
+  const params = await searchParams;
+  const q = params.q?.trim() ?? "";
+  const publishedParam = params.published; // "true" | "false" | undefined
+
+  // SQLite (dev) では mode: "insensitive" が使えないため contains のみ使用。
+  // 本番 (Neon Postgres) 切替後は mode: "insensitive" に変更可能。
+  const where: Prisma.CourseWhereInput = {
+    ...(q ? { title: { contains: q } } : {}),
+    ...(publishedParam === "true"
+      ? { published: true }
+      : publishedParam === "false"
+        ? { published: false }
+        : {}),
+  };
+
   const courses = await prisma.course.findMany({
+    where,
     orderBy: { order: "asc" },
     select: {
       id: true,
@@ -40,7 +68,10 @@ export default async function AdminCoursesPage() {
 
       <CreateCourseForm />
 
-      <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+      {/* 検索 / フィルタ */}
+      <CoursesFilterBar currentQ={q} currentPublished={publishedParam} />
+
+      <div className="overflow-x-auto rounded-xl border bg-card shadow-sm">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40 hover:bg-muted/40">
@@ -59,7 +90,9 @@ export default async function AdminCoursesPage() {
                   <div className="flex flex-col items-center gap-3">
                     <BookOpen className="size-10 text-muted-foreground/30" aria-hidden="true" />
                     <p className="text-sm text-muted-foreground">
-                      コースがまだありません。上のフォームから作成してください。
+                      {q || publishedParam
+                        ? "検索条件に一致するコースがありません。"
+                        : "コースがまだありません。上のフォームから作成してください。"}
                     </p>
                   </div>
                 </TableCell>

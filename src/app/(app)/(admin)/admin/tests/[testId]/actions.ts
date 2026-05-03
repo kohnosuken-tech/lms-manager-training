@@ -66,6 +66,7 @@ export async function updateQuestionAction(
   try {
     await updateQuestion(actor.id, {
       id: parsed.data.id,
+      testId: parsed.data.testId,
       type: parsed.data.type,
       prompt: parsed.data.prompt,
       explanation: parsed.data.explanation,
@@ -91,7 +92,7 @@ export async function deleteQuestionAction(
   const parsed = DeleteSchema.safeParse(payload);
   if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
   try {
-    await deleteQuestion(actor.id, parsed.data.id);
+    await deleteQuestion(actor.id, { id: parsed.data.id, testId: parsed.data.testId });
     revalidatePath(`/admin/tests/${parsed.data.testId}`);
     return ok(null);
   } catch (e) {

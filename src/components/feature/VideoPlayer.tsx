@@ -286,9 +286,24 @@ function FileVideoPlayer({
   const ratioPct = Math.min(100, Math.round(ratio * 100));
   const requiredPct = Math.round(requiredCompletionRate * 100);
 
+  // blockSeek 時にコンテナのキーボード操作 (Space / Enter) で再生/停止をトグルする
+  const handleContainerKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!blockSeek) return;
+    if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      togglePlay();
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-md bg-muted">
+      <div
+        className="overflow-hidden rounded-md bg-muted"
+        tabIndex={blockSeek ? 0 : undefined}
+        role={blockSeek ? "button" : undefined}
+        aria-label={blockSeek ? "動画プレーヤー — スペースで再生/停止" : undefined}
+        onKeyDown={blockSeek ? handleContainerKeyDown : undefined}
+      >
         {videoUnplayable ? (
           <div className="aspect-video flex items-center justify-center text-sm text-muted-foreground p-6 text-center">
             動画を再生できませんでした (モック環境のダミー mp4)。
@@ -321,6 +336,13 @@ function FileVideoPlayer({
           variant="outline"
           onClick={togglePlay}
           disabled={videoUnplayable}
+          onKeyDown={(e) => {
+            if (e.key === " " || e.key === "Enter") {
+              e.preventDefault();
+              togglePlay();
+            }
+          }}
+          aria-label={playing ? "停止" : "再生"}
         >
           {playing ? "停止" : "再生"}
         </Button>

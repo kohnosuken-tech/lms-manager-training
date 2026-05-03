@@ -32,21 +32,22 @@ export async function createUser(
   try {
     const created = await prisma.user.create({
       data: { email, name, role: input.role },
-      select: { id: true, email: true, name: true, role: true },
+      select: { id: true, role: true },
     });
 
+    // H-4: PII (email / name) を diff から除外し userId のみ記録
     await container.audit.write({
       actorId,
       action: "USER_CREATE",
       target: `User:${created.id}`,
-      diff: { email: created.email, name: created.name, role: created.role },
+      diff: { userId: created.id, role: created.role },
     });
 
     // 招待メール (モックは logger 経由で出力)
     await container.mail.send(
-      created.email,
+      email,
       "[LMS] アカウントが発行されました",
-      `${created.name} さん、研修管理システムに招待されました。\nログイン後、初回パスワードを設定してください。`,
+      `${name} さん、研修管理システムに招待されました。\nログイン後、初回パスワードを設定してください。`,
     );
 
     container.logger.info("user.create", { actorId, userId: created.id });
@@ -194,16 +195,21 @@ export async function deactivateUser(
     throw new AppError("NOT_FOUND", "対象ユーザーが見つかりません。", 404);
   }
 
+  // H-2: 無効化時に sessionVersion を increment して既存 JWT を revoke
   await prisma.user.update({
     where: { id: userId },
-    data: { deactivated },
+    data: {
+      deactivated,
+      ...(deactivated ? { sessionVersion: { increment: 1 } } : {}),
+    },
   });
 
+  // H-4: PII を diff から除外し userId / 状態変化のみ記録
   await container.audit.write({
     actorId,
     action: "USER_DEACTIVATE",
     target: `User:${userId}`,
-    diff: { from: target.deactivated, to: deactivated },
+    diff: { userId, from: target.deactivated, to: deactivated },
   });
 }
 
@@ -228,12 +234,85 @@ export async function changeRole(
   }
   if (target.role === role) return;
 
-  await prisma.user.update({ where: { id: userId }, data: { role } });
+  // H-2: ロール変更時に sessionVersion を increment して既存 JWT を revoke
+  await prisma.user.update({
+    where: { id: userId },
+    data: { role, sessionVersion: { increment: 1 } },
+  });
 
+  // H-4: diff に PII を含めない (userId / role 変更のみ)
   await container.audit.write({
     actorId,
     action: "ROLE_CHANGE",
     target: `User:${userId}`,
-    diff: { from: target.role, to: role },
+    diff: { userId, from: target.role, to: role },
   });
+}
+
+// ---------- クエリ拡張 (U-3 サーバー側) ----------
+
+export type ListUsersInput = {
+  /** email / name 部分一致 */
+  q?: string;
+  role?: "STUDENT" | "ADMIN";
+  deactivated?: boolean;
+  take?: number;
+  /** id ベースカーソル (このレコードより後を返す) */
+  cursor?: string;
+};
+
+export type UserListItem = {
+  id: string;
+  email: string;
+  name: string;
+  role: "STUDENT" | "ADMIN";
+  deactivated: boolean;
+  createdAt: Date;
+};
+
+export type ListUsersResult = {
+  items: UserListItem[];
+  nextCursor: string | null;
+};
+
+export async function listUsers(
+  input: ListUsersInput = {},
+): Promise<ListUsersResult> {
+  const take = Math.min(input.take ?? 50, 200);
+
+  const where: Prisma.UserWhereInput = {
+    ...(input.role !== undefined ? { role: input.role } : {}),
+    ...(input.deactivated !== undefined
+      ? { deactivated: input.deactivated }
+      : {}),
+    ...(input.q
+      ? {
+          OR: [
+            { email: { contains: input.q } },
+            { name: { contains: input.q } },
+          ],
+        }
+      : {}),
+  };
+
+  const items = await prisma.user.findMany({
+    where,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: take + 1,
+    ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      role: true,
+      deactivated: true,
+      createdAt: true,
+    },
+  });
+
+  const hasNext = items.length > take;
+  const page = hasNext ? items.slice(0, take) : items;
+  const nextCursor = hasNext ? (page[page.length - 1]?.id ?? null) : null;
+
+  return { items: page as UserListItem[], nextCursor };
 }

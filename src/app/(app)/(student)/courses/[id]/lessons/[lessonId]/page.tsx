@@ -42,7 +42,7 @@ export default async function LessonPage({
     if (!enrollment) redirect("/forbidden");
   }
 
-  // 前後 Lesson + 自分の Progress
+  // 前後 Lesson + 自分の Progress を並列取得
   const [siblings, progress] = await Promise.all([
     prisma.lesson.findMany({
       where: { courseId: id },
@@ -62,6 +62,39 @@ export default async function LessonPage({
   const idx = siblings.findIndex((l) => l.id === lessonId);
   const prev = idx > 0 ? siblings[idx - 1] : null;
   const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
+
+  // コース全体の完了判定のために他のレッスンの進捗を取得
+  // 「このレッスンを完了したらコース全完了」= 他のレッスン全てが完了済み かつ これが最後のレッスン
+  const isLastLesson = next === null;
+
+  // 他のレッスン ID (このレッスンを除く)
+  const otherLessonIds = siblings.filter((l) => l.id !== lessonId).map((l) => l.id);
+
+  // 最後のレッスンかつ他にレッスンがある場合のみ他の進捗を取得
+  let allOthersCompleted = otherLessonIds.length === 0;
+  if (isLastLesson && otherLessonIds.length > 0) {
+    const otherProgresses = await prisma.progress.findMany({
+      where: {
+        userId: user.id,
+        lessonId: { in: otherLessonIds },
+        completed: true,
+      },
+      select: { lessonId: true },
+    });
+    allOthersCompleted = otherProgresses.length === otherLessonIds.length;
+  }
+
+  // このレッスンが最後 かつ 他のレッスンが全完了 → テスト誘導対象
+  const willCompleteAll = isLastLesson && allOthersCompleted;
+
+  // コースに紐づく公開済みテストを取得 (テスト誘導対象のときのみ)
+  const courseTests = willCompleteAll
+    ? await prisma.test.findMany({
+        where: { courseId: id, published: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, title: true },
+      })
+    : [];
 
   const requiredRate = lesson.requiredCompletionRate ?? DEFAULT_COMPLETION_RATE;
   const simulateEnabled = process.env.NEXT_PUBLIC_SIMULATE_VIDEO === "true";
@@ -108,6 +141,42 @@ export default async function LessonPage({
         </CardContent>
       </Card>
 
+      {/* テスト誘導 CTA: コースの最後のレッスン + 他が全完了 + 公開テストがある場合 */}
+      {willCompleteAll && courseTests.length > 0 ? (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="text-base">コース確認テストを受けましょう</CardTitle>
+            <CardDescription>
+              このレッスンを完了するとコース全体が完了になります。確認テストで理解度を確認してください。
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {courseTests.length === 1 ? (
+                <Button asChild>
+                  <Link href={`/tests/${courseTests[0]!.id}`}>
+                    {courseTests[0]!.title} を受ける
+                  </Link>
+                </Button>
+              ) : (
+                <>
+                  <Button asChild>
+                    <Link href={`/tests/${courseTests[0]!.id}`}>
+                      {courseTests[0]!.title} を受ける
+                    </Link>
+                  </Button>
+                  <Button asChild variant="outline">
+                    <Link href={`/courses/${id}`}>
+                      テスト一覧を見る ({courseTests.length} 件)
+                    </Link>
+                  </Button>
+                </>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <div className="flex items-center justify-between gap-3">
         {prev ? (
           <Button asChild variant="outline" size="sm">
@@ -127,6 +196,12 @@ export default async function LessonPage({
           <Button asChild variant="outline" size="sm">
             <Link href={`/courses/${id}/lessons/${next.id}`}>
               {next.order + 1}. {next.title} →
+            </Link>
+          </Button>
+        ) : willCompleteAll && courseTests.length > 0 ? (
+          <Button asChild size="sm">
+            <Link href={`/tests/${courseTests[0]!.id}`}>
+              テストを受ける →
             </Link>
           </Button>
         ) : (

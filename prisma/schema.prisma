@@ -58,14 +58,15 @@ enum AuditAction {
 // ---------- Core entities ----------
 
 model User {
-  id           String   @id @default(cuid())
-  clerkUserId  String?  @unique // モックでは null 可、本番で Clerk と紐付け
-  email        String   @unique
-  name         String
-  role         Role     @default(STUDENT)
-  deactivated  Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(cuid())
+  clerkUserId    String?  @unique // モックでは null 可、本番で Clerk と紐付け
+  email          String   @unique
+  name           String
+  role           Role     @default(STUDENT)
+  deactivated    Boolean  @default(false)
+  sessionVersion Int      @default(1) // H-2: JWT revoke 用バージョン番号
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   enrollments  Enrollment[]
   progresses   Progress[]

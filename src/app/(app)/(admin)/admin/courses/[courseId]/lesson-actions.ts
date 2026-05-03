@@ -140,6 +140,7 @@ export async function updateLessonAction(
     );
     await updateLesson(actor.id, {
       id: parsed.data.id,
+      courseId: parsed.data.courseId,
       title: parsed.data.title,
       description: parsed.data.description,
       videoUrl: parsed.data.videoUrl,
@@ -175,7 +176,7 @@ export async function deleteLessonAction(
   });
   if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
   try {
-    await deleteLesson(actor.id, parsed.data.id);
+    await deleteLesson(actor.id, { id: parsed.data.id, courseId: parsed.data.courseId });
     revalidatePath(`/admin/courses/${parsed.data.courseId}`);
     return ok(null);
   } catch (e) {

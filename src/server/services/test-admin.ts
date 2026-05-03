@@ -222,6 +222,7 @@ export async function addQuestion(
 
 export type UpdateQuestionInput = {
   id: string;
+  testId: string; // H-5: 呼び出し元が所属テストを明示的に指定する
   type: QuestionType;
   prompt: string;
   explanation: string;
@@ -242,6 +243,15 @@ export async function updateQuestion(
     include: { choices: true },
   });
   if (!before) throw new AppError("NOT_FOUND", "設問が見つかりません。", 404);
+
+  // H-5: question が指定された testId に属することを検証
+  if (before.testId !== input.testId) {
+    throw new AppError(
+      "NOT_FOUND",
+      "設問が見つかりません。",
+      404,
+    );
+  }
 
   // 選択肢は丸ごと差し替え (Answer は Question 単位の Cascade で消えるが、
   // 公開後の編集では原則新規問題として登録するべき。簡易実装。)
@@ -271,20 +281,35 @@ export async function updateQuestion(
   });
 }
 
+export type DeleteQuestionInput = {
+  id: string;
+  testId: string; // H-5: 呼び出し元が所属テストを明示的に指定する
+};
+
 export async function deleteQuestion(
   actorId: string,
-  id: string,
+  input: DeleteQuestionInput,
 ): Promise<void> {
   const before = await prisma.question.findUnique({
-    where: { id },
+    where: { id: input.id },
     select: { id: true, testId: true },
   });
   if (!before) throw new AppError("NOT_FOUND", "設問が見つかりません。", 404);
-  await prisma.question.delete({ where: { id } });
+
+  // H-5: question が指定された testId に属することを検証
+  if (before.testId !== input.testId) {
+    throw new AppError(
+      "NOT_FOUND",
+      "設問が見つかりません。",
+      404,
+    );
+  }
+
+  await prisma.question.delete({ where: { id: input.id } });
   await container.audit.write({
     actorId,
     action: "TEST_UPDATE",
-    target: `Question:${id}`,
+    target: `Question:${input.id}`,
     diff: { deleted: true, ...before },
   });
 }
