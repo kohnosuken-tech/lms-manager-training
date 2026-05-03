@@ -9,7 +9,12 @@
 
 const DEV_SESSION_SECRET = "dev-secret-change-me-32chars-long-please";
 
-if (process.env.NODE_ENV === "production") {
+// Next.js のビルド時 (page data collection) にもこのモジュールが評価されるため、
+// build phase の場合はスキップする。実行時 (Vercel Function 起動時) に検査が走る。
+const isBuildPhase =
+  process.env.NEXT_PHASE === "phase-production-build";
+
+if (process.env.NODE_ENV === "production" && !isBuildPhase) {
   // SESSION_SECRET がデフォルト dev 値のまま → 即 throw
   if (process.env.SESSION_SECRET === DEV_SESSION_SECRET) {
     throw new Error(
