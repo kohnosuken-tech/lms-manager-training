@@ -12,22 +12,61 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import { CreateCourseForm } from "./create-course-form";
+import { CoursesFilterBar } from "./courses-filter-bar";
 
 export const metadata = { title: "コース管理 | LMS" };
 
-export default async function AdminCoursesPage() {
+type SearchParams = Promise<{
+  q?: string;
+  published?: string;
+}>;
+
+export default async function AdminCoursesPage({
+  searchParams,
+}: {
+  searchParams: SearchParams;
+}) {
   await requireAdmin();
-  const courses = await prisma.course.findMany({
-    orderBy: { order: "asc" },
-    select: {
-      id: true,
-      title: true,
-      published: true,
-      order: true,
-      _count: { select: { lessons: true, enrollments: true } },
-    },
-  });
+
+  const params = await searchParams;
+  const q = params.q?.trim() ?? "";
+  const publishedParam = params.published; // "true" | "false" | undefined
+
+  // CmsPort からコース一覧を取得し、クライアント側でフィルタリング
+  const [allCourses, allEnrollments] = await Promise.all([
+    container.cms.listCourses(),
+    prisma.enrollment.findMany({ select: { courseId: true } }),
+  ]);
+
+  // レッスン数は CmsPort から一括取得
+  const allLessons = await container.cms.listLessons();
+  const lessonCountByCourse = new Map<string, number>();
+  for (const l of allLessons) {
+    lessonCountByCourse.set(l.courseId, (lessonCountByCourse.get(l.courseId) ?? 0) + 1);
+  }
+
+  // 受講者数 (Enrollment 数) をコースごとに集計
+  const enrollmentCountByCourse = new Map<string, number>();
+  for (const e of allEnrollments) {
+    enrollmentCountByCourse.set(e.courseId, (enrollmentCountByCourse.get(e.courseId) ?? 0) + 1);
+  }
+
+  // フィルタリング
+  let courses = allCourses;
+  if (q) {
+    const lower = q.toLowerCase();
+    courses = courses.filter((c) => c.title.toLowerCase().includes(lower));
+  }
+  if (publishedParam === "true") {
+    courses = courses.filter((c) => c.published);
+  } else if (publishedParam === "false") {
+    courses = courses.filter((c) => !c.published);
+  }
+
+  // order 順でソート
+  courses = [...courses].sort((a, b) => a.order - b.order);
 
   return (
     <div className="space-y-6">
@@ -40,7 +79,10 @@ export default async function AdminCoursesPage() {
 
       <CreateCourseForm />
 
-      <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+      {/* 検索 / フィルタ */}
+      <CoursesFilterBar currentQ={q} currentPublished={publishedParam} />
+
+      <div className="overflow-x-auto rounded-xl border bg-card shadow-sm">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/40 hover:bg-muted/40">
@@ -59,7 +101,9 @@ export default async function AdminCoursesPage() {
                   <div className="flex flex-col items-center gap-3">
                     <BookOpen className="size-10 text-muted-foreground/30" aria-hidden="true" />
                     <p className="text-sm text-muted-foreground">
-                      コースがまだありません。上のフォームから作成してください。
+                      {q || publishedParam
+                        ? "検索条件に一致するコースがありません。"
+                        : "コースがまだありません。上のフォームから作成してください。"}
                     </p>
                   </div>
                 </TableCell>
@@ -69,8 +113,8 @@ export default async function AdminCoursesPage() {
                 <TableRow key={c.id} className="hover:bg-muted/30 transition-colors">
                   <TableCell className="text-muted-foreground tabular-nums">{c.order}</TableCell>
                   <TableCell className="font-medium">{c.title}</TableCell>
-                  <TableCell>{c._count.lessons}</TableCell>
-                  <TableCell>{c._count.enrollments}</TableCell>
+                  <TableCell>{lessonCountByCourse.get(c.id) ?? 0}</TableCell>
+                  <TableCell>{enrollmentCountByCourse.get(c.id) ?? 0}</TableCell>
                   <TableCell>
                     {c.published ? (
                       <Badge>公開中</Badge>

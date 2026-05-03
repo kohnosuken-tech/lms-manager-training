@@ -54,7 +54,9 @@ export function TestTaker({ submissionId, testId, questions }: TestTakerProps) {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMessage(null);
+    // M-4: testId を渡してサービス層で Submission との整合を検証する
     const payload = {
+      testId,
       submissionId,
       answers: questions.map((q) => ({
         questionId: q.id,

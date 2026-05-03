@@ -11,31 +11,35 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/server/auth";
-import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import { CreateTestForm } from "./create-test-form";
 
 export const metadata = { title: "テスト管理 | LMS" };
 
 export default async function AdminTestsPage() {
   await requireAdmin();
-  const [tests, courses] = await Promise.all([
-    prisma.test.findMany({
-      orderBy: [{ courseId: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        title: true,
-        published: true,
-        passingScore: true,
-        maxAttempts: true,
-        course: { select: { id: true, title: true } },
-        _count: { select: { questions: true } },
-      },
-    }),
-    prisma.course.findMany({
-      orderBy: { order: "asc" },
-      select: { id: true, title: true },
-    }),
+
+  const [tests, courses, questions] = await Promise.all([
+    container.cms.listTests(),
+    container.cms.listCourses(),
+    container.cms.listQuestions(),
   ]);
+
+  // courseId -> courseTitle のマップ
+  const courseMap = new Map(courses.map((c) => [c.id, c]));
+
+  // testId -> question 数のマップ
+  const questionCountByTest = new Map<string, number>();
+  for (const q of questions) {
+    questionCountByTest.set(q.testId, (questionCountByTest.get(q.testId) ?? 0) + 1);
+  }
+
+  const sortedCourses = [...courses].sort((a, b) => a.order - b.order);
+  const sortedTests = [...tests].sort((a, b) => {
+    const cmp = a.courseId.localeCompare(b.courseId);
+    if (cmp !== 0) return cmp;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
 
   return (
     <div className="space-y-6">
@@ -46,13 +50,13 @@ export default async function AdminTestsPage() {
         </p>
       </div>
 
-      {courses.length === 0 ? (
+      {sortedCourses.length === 0 ? (
         <div className="flex items-center gap-3 rounded-xl border bg-card p-4">
           <AlertCircle className="size-4 text-muted-foreground shrink-0" aria-hidden="true" />
           <p className="text-sm text-muted-foreground">先にコースを作成してください。</p>
         </div>
       ) : (
-        <CreateTestForm courses={courses} />
+        <CreateTestForm courses={sortedCourses.map((c) => ({ id: c.id, title: c.title }))} />
       )}
 
       <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
@@ -69,7 +73,7 @@ export default async function AdminTestsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {tests.length === 0 ? (
+            {sortedTests.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="py-16 text-center">
                   <div className="flex flex-col items-center gap-3">
@@ -79,13 +83,15 @@ export default async function AdminTestsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              tests.map((t) => (
+              sortedTests.map((t) => (
                 <TableRow key={t.id} className="hover:bg-muted/30 transition-colors">
                   <TableCell className="font-medium">{t.title}</TableCell>
-                  <TableCell className="text-muted-foreground">{t.course.title}</TableCell>
-                  <TableCell>{t._count.questions}</TableCell>
-                  <TableCell>{t.passingScore}%</TableCell>
-                  <TableCell>{t.maxAttempts}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {courseMap.get(t.courseId)?.title ?? t.courseId}
+                  </TableCell>
+                  <TableCell>{questionCountByTest.get(t.id) ?? 0}</TableCell>
+                  <TableCell>{t.passingScore != null ? `${t.passingScore}%` : "-"}</TableCell>
+                  <TableCell>{t.maxAttempts ?? "-"}</TableCell>
                   <TableCell>
                     {t.published ? (
                       <Badge>公開中</Badge>

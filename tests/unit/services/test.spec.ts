@@ -2,178 +2,152 @@
  * submitSubmission の自動採点ロジックのユニットテスト
  *
  * SINGLE 選択 / MULTIPLE 選択 / 部分点なし / タイムリミット超過 (status 判定) を検証する。
- * Prisma は test.db (SQLite) を直接使用。container の audit/logger は noop stub を注入。
+ *
+ * Phase E: Test / Question / Choice は Prisma から削除済み。
+ * CmsPort モックを注入して採点ロジックを検証する。
+ * Prisma は Submission / Answer / User / Enrollment / Progress のみを操作する。
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { testPrisma, resetDb } from "../../helpers/db";
 import { submitSubmission } from "@/server/services/test";
+import type { CmsPort, Test, Question, Choice } from "@/server/ports/cms";
 
 // container の audit/logger を noop にしてサイドエフェクトを排除
 vi.mock("@/server/container", () => ({
   container: {
-    audit: { write: vi.fn().mockResolvedValue(undefined) },
+    audit:  { write: vi.fn().mockResolvedValue(undefined) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    cms:    null, // テストでは明示的に cms を渡す
   },
 }));
 
-// ---- セットアップ ヘルパー ----
+// ---------- CmsPort モックファクトリ ----------
 
-type Fixtures = {
-  userId: string;
-  courseId: string;
-  testId: string;
-  submissionId: string;
-  questions: {
-    singleQ: { id: string; correctChoiceId: string; wrongChoiceId: string };
-    multiQ: {
-      id: string;
-      correctChoiceIds: string[];
-      wrongChoiceId: string;
-    };
+const now = new Date().toISOString();
+
+function makeMockCms(opts: {
+  tests?:     Test[];
+  questions?: Question[];
+  choices?:   Choice[];
+}): CmsPort {
+  const tests     = opts.tests     ?? [];
+  const questions = opts.questions ?? [];
+  const choices   = opts.choices   ?? [];
+  return {
+    listCourses:   vi.fn().mockResolvedValue([]),
+    listLessons:   vi.fn().mockResolvedValue([]),
+    listTests:     vi.fn().mockResolvedValue(tests),
+    listQuestions: vi.fn().mockImplementation((testId?: string) =>
+      Promise.resolve(testId ? questions.filter((q) => q.testId === testId) : questions),
+    ),
+    listChoices:   vi.fn().mockResolvedValue(choices),
+    getCourse:     vi.fn().mockResolvedValue(null),
+    getLesson:     vi.fn().mockResolvedValue(null),
+    getTest:       vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(tests.find((t) => t.id === id) ?? null),
+    ),
+    getQuestion:   vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(questions.find((q) => q.id === id) ?? null),
+    ),
   };
+}
+
+// ---------- フィクスチャ定数 ----------
+
+const COURSE_ID = "test-course-id";
+const TEST_ID   = "test-test-id";
+
+// Question / Choice の固定 ID
+const SINGLE_Q_ID        = "q-single";
+const SINGLE_CORRECT_CID = "c-single-correct";
+const SINGLE_WRONG_CID   = "c-single-wrong";
+
+const MULTI_Q_ID          = "q-multi";
+const MULTI_CORRECT_CID_A = "c-multi-correct-a";
+const MULTI_CORRECT_CID_B = "c-multi-correct-b";
+const MULTI_WRONG_CID     = "c-multi-wrong";
+
+const CMS_TEST: Test = {
+  id:           TEST_ID,
+  courseId:     COURSE_ID,
+  title:        "確認テスト",
+  passingScore: 70,
+  maxAttempts:  3,
+  published:    true,
+  createdAt:    now,
+  updatedAt:    now,
 };
 
-async function buildFixtures(): Promise<Fixtures> {
+const CMS_QUESTIONS: Question[] = [
+  {
+    id: SINGLE_Q_ID, testId: TEST_ID, order: 0, type: "SINGLE",
+    text: "問 1", createdAt: now, updatedAt: now,
+  },
+  {
+    id: MULTI_Q_ID, testId: TEST_ID, order: 1, type: "MULTIPLE",
+    text: "問 2", createdAt: now, updatedAt: now,
+  },
+];
+
+const CMS_CHOICES: Choice[] = [
+  { id: SINGLE_CORRECT_CID, questionId: SINGLE_Q_ID, order: 0, text: "正解",   isCorrect: true,  createdAt: now, updatedAt: now },
+  { id: SINGLE_WRONG_CID,   questionId: SINGLE_Q_ID, order: 1, text: "不正解", isCorrect: false, createdAt: now, updatedAt: now },
+  { id: MULTI_CORRECT_CID_A, questionId: MULTI_Q_ID, order: 0, text: "正解A",  isCorrect: true,  createdAt: now, updatedAt: now },
+  { id: MULTI_CORRECT_CID_B, questionId: MULTI_Q_ID, order: 1, text: "正解B",  isCorrect: true,  createdAt: now, updatedAt: now },
+  { id: MULTI_WRONG_CID,     questionId: MULTI_Q_ID, order: 2, text: "不正解C",isCorrect: false, createdAt: now, updatedAt: now },
+];
+
+// ---------- Prisma フィクスチャ (User + Submission のみ) ----------
+
+async function buildFixtures(): Promise<{ userId: string; submissionId: string }> {
   const user = await testPrisma.user.create({
     data: { email: "testuser@example.com", name: "テストユーザー", role: "STUDENT" },
     select: { id: true },
   });
 
-  const course = await testPrisma.course.create({
-    data: { title: "テストコース", description: "", order: 0, published: true },
-    select: { id: true },
-  });
-
-  const lesson = await testPrisma.lesson.create({
-    data: {
-      courseId: course.id,
-      title: "レッスン1",
-      videoUrl: "/sample.mp4",
-      durationSec: 60,
-      order: 0,
-    },
-    select: { id: true },
-  });
-
-  await testPrisma.enrollment.create({
-    data: { userId: user.id, courseId: course.id },
-  });
-
-  await testPrisma.progress.create({
-    data: {
-      userId: user.id,
-      lessonId: lesson.id,
-      watchedSec: 60,
-      completed: true,
-      completedAt: new Date(),
-    },
-  });
-
-  const test = await testPrisma.test.create({
-    data: {
-      courseId: course.id,
-      title: "確認テスト",
-      passingScore: 70,
-      maxAttempts: 3,
-      published: true,
-    },
-    select: { id: true },
-  });
-
-  // SINGLE 問題: 選択肢 2 つ、1 つ正解
-  const singleQ = await testPrisma.question.create({
-    data: {
-      testId: test.id,
-      type: "SINGLE",
-      prompt: "問 1",
-      order: 0,
-      choices: {
-        create: [
-          { label: "正解", correct: true, order: 0 },
-          { label: "不正解", correct: false, order: 1 },
-        ],
-      },
-    },
-    include: { choices: true },
-  });
-
-  // MULTIPLE 問題: 選択肢 3 つ、2 つ正解
-  const multiQ = await testPrisma.question.create({
-    data: {
-      testId: test.id,
-      type: "MULTIPLE",
-      prompt: "問 2",
-      order: 1,
-      choices: {
-        create: [
-          { label: "正解A", correct: true, order: 0 },
-          { label: "正解B", correct: true, order: 1 },
-          { label: "不正解C", correct: false, order: 2 },
-        ],
-      },
-    },
-    include: { choices: true },
-  });
-
   const submission = await testPrisma.submission.create({
     data: {
-      testId: test.id,
-      userId: user.id,
-      status: "IN_PROGRESS",
+      testId:    TEST_ID,
+      userId:    user.id,
+      status:    "IN_PROGRESS",
       attemptNo: 1,
     },
     select: { id: true },
   });
 
-  const singleCorrect = singleQ.choices.find((c) => c.correct)!;
-  const singleWrong = singleQ.choices.find((c) => !c.correct)!;
-  const multiCorrects = multiQ.choices.filter((c) => c.correct).map((c) => c.id);
-  const multiWrong = multiQ.choices.find((c) => !c.correct)!;
-
-  return {
-    userId: user.id,
-    courseId: course.id,
-    testId: test.id,
-    submissionId: submission.id,
-    questions: {
-      singleQ: {
-        id: singleQ.id,
-        correctChoiceId: singleCorrect.id,
-        wrongChoiceId: singleWrong.id,
-      },
-      multiQ: {
-        id: multiQ.id,
-        correctChoiceIds: multiCorrects,
-        wrongChoiceId: multiWrong.id,
-      },
-    },
-  };
+  return { userId: user.id, submissionId: submission.id };
 }
 
+// ---------- テスト ----------
+
 describe("submitSubmission", () => {
-  let fx: Fixtures;
+  let userId:       string;
+  let submissionId: string;
+  let cms:          CmsPort;
 
   beforeEach(async () => {
     await resetDb();
-    fx = await buildFixtures();
+    const fx = await buildFixtures();
+    userId       = fx.userId;
+    submissionId = fx.submissionId;
+    cms = makeMockCms({ tests: [CMS_TEST], questions: CMS_QUESTIONS, choices: CMS_CHOICES });
   });
 
   it("SINGLE 問題に正解すると score=100 かつ PASSED になる (passingScore=70)", async () => {
-    // 2 問中 2 問正解 → 100点
-    const result = await submitSubmission(fx.submissionId, fx.userId, [
-      { questionId: fx.questions.singleQ.id, choiceIds: [fx.questions.singleQ.correctChoiceId] },
-      { questionId: fx.questions.multiQ.id, choiceIds: fx.questions.multiQ.correctChoiceIds },
-    ]);
+    const result = await submitSubmission(submissionId, userId, [
+      { questionId: SINGLE_Q_ID, choiceIds: [SINGLE_CORRECT_CID] },
+      { questionId: MULTI_Q_ID,  choiceIds: [MULTI_CORRECT_CID_A, MULTI_CORRECT_CID_B] },
+    ], undefined, cms);
 
     expect(result.score).toBe(100);
     expect(result.status).toBe("PASSED");
   });
 
   it("SINGLE 問題に不正解すると score=50 (2問中1問正解) かつ FAILED になる", async () => {
-    const result = await submitSubmission(fx.submissionId, fx.userId, [
-      { questionId: fx.questions.singleQ.id, choiceIds: [fx.questions.singleQ.wrongChoiceId] },
-      { questionId: fx.questions.multiQ.id, choiceIds: fx.questions.multiQ.correctChoiceIds },
-    ]);
+    const result = await submitSubmission(submissionId, userId, [
+      { questionId: SINGLE_Q_ID, choiceIds: [SINGLE_WRONG_CID] },
+      { questionId: MULTI_Q_ID,  choiceIds: [MULTI_CORRECT_CID_A, MULTI_CORRECT_CID_B] },
+    ], undefined, cms);
 
     expect(result.score).toBe(50);
     expect(result.status).toBe("FAILED");
@@ -181,31 +155,27 @@ describe("submitSubmission", () => {
 
   it("MULTIPLE 問題は部分点なし: 正解の一部のみ選択すると不正解になる", async () => {
     // multiQ の正解は 2 つ。1 つだけ選ぶと不正解
-    const result = await submitSubmission(fx.submissionId, fx.userId, [
-      { questionId: fx.questions.singleQ.id, choiceIds: [fx.questions.singleQ.correctChoiceId] },
-      { questionId: fx.questions.multiQ.id, choiceIds: [fx.questions.multiQ.correctChoiceIds[0]] },
-    ]);
+    const result = await submitSubmission(submissionId, userId, [
+      { questionId: SINGLE_Q_ID, choiceIds: [SINGLE_CORRECT_CID] },
+      { questionId: MULTI_Q_ID,  choiceIds: [MULTI_CORRECT_CID_A] },
+    ], undefined, cms);
 
-    // singleQ: 正解 (1点) + multiQ: 不正解 (0点) = 1/2 = 50%
     expect(result.score).toBe(50);
     expect(result.status).toBe("FAILED");
   });
 
   it("MULTIPLE 問題で正解に余分な選択肢を加えると不正解になる (部分点なし)", async () => {
-    const result = await submitSubmission(fx.submissionId, fx.userId, [
-      { questionId: fx.questions.singleQ.id, choiceIds: [fx.questions.singleQ.correctChoiceId] },
-      {
-        questionId: fx.questions.multiQ.id,
-        choiceIds: [...fx.questions.multiQ.correctChoiceIds, fx.questions.multiQ.wrongChoiceId],
-      },
-    ]);
+    const result = await submitSubmission(submissionId, userId, [
+      { questionId: SINGLE_Q_ID, choiceIds: [SINGLE_CORRECT_CID] },
+      { questionId: MULTI_Q_ID,  choiceIds: [MULTI_CORRECT_CID_A, MULTI_CORRECT_CID_B, MULTI_WRONG_CID] },
+    ], undefined, cms);
 
     expect(result.score).toBe(50);
     expect(result.status).toBe("FAILED");
   });
 
   it("全問不正解 (回答なし) で score=0 かつ FAILED になる", async () => {
-    const result = await submitSubmission(fx.submissionId, fx.userId, []);
+    const result = await submitSubmission(submissionId, userId, [], undefined, cms);
 
     expect(result.score).toBe(0);
     expect(result.status).toBe("FAILED");
@@ -213,11 +183,11 @@ describe("submitSubmission", () => {
 
   it("既に確定済みの Submission を再送信しようとすると CONFLICT エラーが発生する", async () => {
     // 一度確定させる
-    await submitSubmission(fx.submissionId, fx.userId, []);
+    await submitSubmission(submissionId, userId, [], undefined, cms);
 
     // 同じ submissionId で再度送信を試みる
     await expect(
-      submitSubmission(fx.submissionId, fx.userId, []),
+      submitSubmission(submissionId, userId, [], undefined, cms),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
@@ -228,7 +198,42 @@ describe("submitSubmission", () => {
     });
 
     await expect(
-      submitSubmission(fx.submissionId, otherUser.id, []),
+      submitSubmission(submissionId, otherUser.id, [], undefined, cms),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("expectedTestId が Submission の testId と一致する場合は正常に採点される", async () => {
+    const result = await submitSubmission(
+      submissionId,
+      userId,
+      [],
+      TEST_ID, // 正しい testId
+      cms,
+    );
+    expect(result.score).toBe(0);
+    expect(result.status).toBe("FAILED");
+  });
+
+  it("expectedTestId が Submission の testId と不一致の場合は NOT_FOUND エラーが発生する (M-4)", async () => {
+    const wrongTestId = "wrong-test-id-that-does-not-match";
+
+    await expect(
+      submitSubmission(submissionId, userId, [], wrongTestId, cms),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("expectedTestId を省略した場合は検証をスキップして正常採点される", async () => {
+    const result = await submitSubmission(
+      submissionId,
+      userId,
+      [
+        { questionId: SINGLE_Q_ID, choiceIds: [SINGLE_CORRECT_CID] },
+        { questionId: MULTI_Q_ID,  choiceIds: [MULTI_CORRECT_CID_A, MULTI_CORRECT_CID_B] },
+      ],
+      undefined, // 省略
+      cms,
+    );
+    expect(result.score).toBe(100);
+    expect(result.status).toBe("PASSED");
   });
 });

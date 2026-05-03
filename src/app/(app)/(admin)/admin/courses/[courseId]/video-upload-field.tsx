@@ -418,10 +418,10 @@ export function VideoUploadField({
             </p>
           ) : null}
 
-          {/* YouTube 動画の場合の duration 注意事項 */}
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-            YouTube は外部動画のため、動画の長さを手動で入力してください。
-            「再生時間 (秒)」フィールドに秒数を入力することで完了率の計算が有効になります。
+          {/* YouTube 動画の duration 自動取得の説明 */}
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+            「再生時間 (秒)」を <span className="font-mono">0</span> のままにしておくと、保存時に
+            YouTube から動画の長さを自動取得します。手動で値を入れた場合はその値が優先されます。
           </div>
         </TabsContent>
       </Tabs>

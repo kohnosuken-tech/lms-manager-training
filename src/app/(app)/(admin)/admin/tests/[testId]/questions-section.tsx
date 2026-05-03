@@ -1,14 +1,38 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { toast } from "sonner";
+import { ChevronDown, ChevronUp, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Label, RequiredLabel } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { EmptyState } from "@/components/ui/empty-state";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   addQuestionAction,
   deleteQuestionAction,
+  reorderQuestionAction,
   updateQuestionAction,
 } from "./actions";
 
@@ -49,12 +73,18 @@ export function QuestionsSection({
             testId={testId}
             question={q}
             index={i + 1}
+            isFirst={i === 0}
+            isLast={i === questions.length - 1}
+            prevQuestion={i > 0 ? questions[i - 1] : null}
+            nextQuestion={i < questions.length - 1 ? questions[i + 1] : null}
           />
         ))}
         {questions.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            まだ設問がありません。上のフォームから追加してください。
-          </p>
+          <EmptyState
+            icon={<HelpCircle className="size-10" />}
+            title="まだ設問がありません"
+            description="上のフォームから設問を追加してください。"
+          />
         ) : null}
       </div>
     </div>
@@ -90,8 +120,10 @@ function NewQuestionForm({ testId }: { testId: string }) {
       });
       if (r.ok) {
         reset();
+        toast.success("設問を追加しました。");
       } else {
         setError(r.error.message);
+        toast.error(r.error.message);
       }
     });
   };
@@ -137,13 +169,58 @@ function QuestionEditor({
   testId,
   question,
   index,
+  isFirst,
+  isLast,
+  prevQuestion,
+  nextQuestion,
 }: {
   testId: string;
   question: Question;
   index: number;
+  isFirst: boolean;
+  isLast: boolean;
+  prevQuestion: Question | null;
+  nextQuestion: Question | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [pending, start] = useTransition();
+  const [reorderPending, startReorder] = useTransition();
+
+  const onMoveUp = () => {
+    if (!prevQuestion) return;
+    startReorder(async () => {
+      const r = await reorderQuestionAction({
+        testId,
+        idA: question.id,
+        orderA: question.order,
+        idB: prevQuestion.id,
+        orderB: prevQuestion.order,
+      });
+      if (r.ok) {
+        toast.success(`Q${index} を上に移動しました。`);
+      } else {
+        toast.error(r.error.message);
+      }
+    });
+  };
+
+  const onMoveDown = () => {
+    if (!nextQuestion) return;
+    startReorder(async () => {
+      const r = await reorderQuestionAction({
+        testId,
+        idA: question.id,
+        orderA: question.order,
+        idB: nextQuestion.id,
+        orderB: nextQuestion.order,
+      });
+      if (r.ok) {
+        toast.success(`Q${index} を下に移動しました。`);
+      } else {
+        toast.error(r.error.message);
+      }
+    });
+  };
   const [type, setType] = useState<"SINGLE" | "MULTIPLE">(question.type);
   const [prompt, setPrompt] = useState(question.prompt);
   const [explanation, setExplanation] = useState(question.explanation);
@@ -171,17 +248,23 @@ function QuestionEditor({
       if (r.ok) {
         setEditing(false);
         setError(null);
+        toast.success(`Q${index} を更新しました。`);
       } else {
         setError(r.error.message);
+        toast.error(r.error.message);
       }
     });
   };
 
   const onDelete = () => {
-    if (!confirm(`Q${index} を削除します。よろしいですか?`)) return;
     start(async () => {
       const r = await deleteQuestionAction({ id: question.id, testId });
-      if (!r.ok) setError(r.error.message);
+      if (r.ok) {
+        toast.success(`Q${index} を削除しました。`);
+      } else {
+        setError(r.error.message);
+        toast.error(r.error.message);
+      }
     });
   };
 
@@ -198,25 +281,69 @@ function QuestionEditor({
             </div>
             <p className="mt-2 font-medium">{question.prompt}</p>
           </div>
-          <div className="space-x-1">
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={onMoveUp}
+              disabled={isFirst || reorderPending || pending}
+              aria-label={`Q${index} を上に移動`}
+              aria-disabled={isFirst}
+            >
+              <ChevronUp className="size-3.5" aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={onMoveDown}
+              disabled={isLast || reorderPending || pending}
+              aria-label={`Q${index} を下に移動`}
+              aria-disabled={isLast}
+            >
+              <ChevronDown className="size-3.5" aria-hidden="true" />
+            </Button>
             <Button
               type="button"
               size="xs"
               variant="outline"
               onClick={() => setEditing(true)}
-              disabled={pending}
+              disabled={pending || reorderPending}
             >
               編集
             </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="destructive"
-              onClick={onDelete}
-              disabled={pending}
-            >
-              削除
-            </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="destructive"
+                  disabled={pending || reorderPending}
+                >
+                  削除
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>設問を削除しますか?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Q{index}「{question.prompt.slice(0, 30)}
+                    {question.prompt.length > 30 ? "..." : ""}
+                    」を削除します。この操作は取り消せません。
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>キャンセル</AlertDialogCancel>
+                  <AlertDialogAction
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                    onClick={onDelete}
+                  >
+                    削除する
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         </div>
         <ul className="text-sm space-y-1">
@@ -321,57 +448,96 @@ function ChoiceEditor({
     <div className="space-y-3">
       <div className="grid gap-3 md:grid-cols-3">
         <div className="md:col-span-2 space-y-1">
-          <Label>設問文</Label>
+          <RequiredLabel>設問文</RequiredLabel>
           <Textarea
             rows={2}
             value={prompt}
             onChange={(e) => onPromptChange(e.target.value)}
             required
+            aria-required="true"
           />
         </div>
         <div className="space-y-1">
           <Label>形式</Label>
-          <select
+          <Select
             value={type}
-            onChange={(e) =>
-              onTypeChange(e.target.value as "SINGLE" | "MULTIPLE")
-            }
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+            onValueChange={(v) => onTypeChange(v as "SINGLE" | "MULTIPLE")}
           >
-            <option value="SINGLE">単一選択 (1 つ正解)</option>
-            <option value="MULTIPLE">複数選択 (複数正解)</option>
-          </select>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="SINGLE">単一選択 (1 つ正解)</SelectItem>
+              <SelectItem value="MULTIPLE">複数選択 (複数正解)</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
       <div className="space-y-2">
         <Label>選択肢</Label>
-        {choices.map((c, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input
-              type={type === "SINGLE" ? "radio" : "checkbox"}
-              name="correct-toggle"
-              checked={c.correct}
-              onChange={(e) => setChoiceCorrect(i, e.target.checked)}
-              aria-label={`選択肢 ${i + 1} を正解にする`}
-            />
-            <Input
-              value={c.label}
-              onChange={(e) => setChoiceLabel(i, e.target.value)}
-              placeholder={`選択肢 ${i + 1}`}
-              className="flex-1"
-            />
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              onClick={() => removeChoice(i)}
-              disabled={choices.length <= 2}
-            >
-              削除
-            </Button>
+        {type === "SINGLE" ? (
+          <RadioGroup
+            value={String(choices.findIndex((c) => c.correct))}
+            onValueChange={(v) => setChoiceCorrect(Number(v), true)}
+            className="gap-2"
+          >
+            {choices.map((c, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <RadioGroupItem
+                  value={String(i)}
+                  id={`choice-radio-${i}`}
+                  aria-label={`選択肢 ${i + 1} を正解にする`}
+                />
+                <Input
+                  value={c.label}
+                  onChange={(e) => setChoiceLabel(i, e.target.value)}
+                  placeholder={`選択肢 ${i + 1}`}
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => removeChoice(i)}
+                  disabled={choices.length <= 2}
+                >
+                  削除
+                </Button>
+              </div>
+            ))}
+          </RadioGroup>
+        ) : (
+          <div className="space-y-2">
+            {choices.map((c, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Checkbox
+                  id={`choice-check-${i}`}
+                  checked={c.correct}
+                  onCheckedChange={(checked) =>
+                    setChoiceCorrect(i, checked === true)
+                  }
+                  aria-label={`選択肢 ${i + 1} を正解にする`}
+                />
+                <Input
+                  value={c.label}
+                  onChange={(e) => setChoiceLabel(i, e.target.value)}
+                  placeholder={`選択肢 ${i + 1}`}
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => removeChoice(i)}
+                  disabled={choices.length <= 2}
+                >
+                  削除
+                </Button>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
         <Button type="button" size="xs" variant="outline" onClick={addChoice}>
           選択肢を追加
         </Button>

@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Label, RequiredLabel } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createCourseAction,
@@ -26,11 +26,12 @@ export function CreateCourseForm() {
       <h2 className="text-base font-medium">新しいコースを作成</h2>
       <div className="grid gap-3 md:grid-cols-3">
         <div className="space-y-1 md:col-span-2">
-          <Label htmlFor="course-title">タイトル</Label>
+          <RequiredLabel htmlFor="course-title">タイトル</RequiredLabel>
           <Input
             id="course-title"
             name="title"
             required
+            aria-required="true"
             maxLength={200}
             defaultValue={state?.values?.title ?? ""}
           />

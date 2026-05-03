@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 
 type Params = { id: string };
 
@@ -22,36 +23,20 @@ export default async function CourseDetailPage({
   const user = await requireUser();
   const { id } = await params;
 
-  const course = await prisma.course.findUnique({
-    where: { id },
-    include: {
-      lessons: {
-        orderBy: { order: "asc" },
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          durationSec: true,
-          order: true,
-        },
-      },
-      tests: {
-        where: { published: true },
-        orderBy: { createdAt: "asc" },
-        select: {
-          id: true,
-          title: true,
-          description: true,
-          passingScore: true,
-          maxAttempts: true,
-        },
-      },
-    },
-  });
+  const [course, lessons, tests] = await Promise.all([
+    container.cms.getCourse(id),
+    container.cms.listLessons(id),
+    container.cms.listTests(id),
+  ]);
   if (!course) notFound();
 
+  const sortedLessons = [...lessons].sort((a, b) => a.order - b.order);
+  const publishedTests = tests
+    .filter((t) => t.published)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
   // 進捗マップ取得 (N+1 回避)
-  const lessonIds = course.lessons.map((l) => l.id);
+  const lessonIds = sortedLessons.map((l) => l.id);
   const progresses =
     lessonIds.length > 0
       ? await prisma.progress.findMany({
@@ -72,7 +57,8 @@ export default async function CourseDetailPage({
 
   // 各 Test の Submission サマリ
   const testSummaries = await Promise.all(
-    course.tests.map(async (t) => {
+    publishedTests.map(async (t) => {
+      const maxAttempts = t.maxAttempts ?? 3;
       const [latest, finishedCount, passed] = await Promise.all([
         prisma.submission.findFirst({
           where: { userId: user.id, testId: t.id },
@@ -102,7 +88,7 @@ export default async function CourseDetailPage({
         latest,
         finishedCount,
         passed: !!passed,
-        remaining: Math.max(0, t.maxAttempts - finishedCount),
+        remaining: Math.max(0, maxAttempts - finishedCount),
       };
     }),
   );
@@ -123,7 +109,7 @@ export default async function CourseDetailPage({
       <section className="space-y-3">
         <h2 className="text-lg font-medium">レッスン</h2>
         <div className="grid gap-3">
-          {course.lessons.map((l) => {
+          {sortedLessons.map((l) => {
             const p = progressMap.get(l.id);
             const status: "DONE" | "IN_PROGRESS" | "NOT_STARTED" = p?.completed
               ? "DONE"
@@ -155,13 +141,13 @@ export default async function CourseDetailPage({
                     ) : null}
                   </CardHeader>
                   <CardContent className="text-xs text-muted-foreground">
-                    約 {Math.round(l.durationSec / 60)} 分
+                    約 {Math.round((l.durationSec ?? 0) / 60)} 分
                   </CardContent>
                 </Card>
               </Link>
             );
           })}
-          {course.lessons.length === 0 ? (
+          {sortedLessons.length === 0 ? (
             <Card>
               <CardContent className="py-8 text-center text-sm text-muted-foreground">
                 レッスンが登録されていません。
@@ -176,6 +162,7 @@ export default async function CourseDetailPage({
           <h2 className="text-lg font-medium">確認テスト</h2>
           <div className="grid gap-3">
             {testSummaries.map((s) => {
+              const maxAttempts = s.test.maxAttempts ?? 3;
               const canTake =
                 allLessonsCompleted && !s.passed && s.remaining > 0;
               return (
@@ -193,14 +180,11 @@ export default async function CourseDetailPage({
                         <Badge variant="outline">未受験</Badge>
                       )}
                     </div>
-                    {s.test.description ? (
-                      <CardDescription>{s.test.description}</CardDescription>
-                    ) : null}
                   </CardHeader>
                   <CardContent className="space-y-3 text-sm">
                     <div className="text-xs text-muted-foreground">
-                      合格基準 {s.test.passingScore}% / 残り受験回数{" "}
-                      {s.remaining} / {s.test.maxAttempts}
+                      合格基準 {s.test.passingScore != null ? `${s.test.passingScore}%` : "-"} / 残り受験回数{" "}
+                      {s.remaining} / {maxAttempts}
                     </div>
                     {s.latest ? (
                       <div className="text-xs">
@@ -234,9 +218,14 @@ export default async function CourseDetailPage({
                           全レッスン完了後に受験可能
                         </Button>
                       ) : (
-                        <Button variant="outline" size="sm" disabled>
-                          受験回数の上限に達しました
-                        </Button>
+                        <>
+                          <Button variant="outline" size="sm" disabled>
+                            受験回数の上限に達しました
+                          </Button>
+                          <p className="text-xs text-muted-foreground">
+                            上限に達した場合は管理者にご連絡ください。
+                          </p>
+                        </>
                       )}
                     </div>
                   </CardContent>

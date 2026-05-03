@@ -8,17 +8,20 @@ import {
 } from "@/components/ui/card";
 import { requireAdmin } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 
 export const metadata = { title: "管理画面 | LMS" };
 
 export default async function AdminPage() {
   const admin = await requireAdmin();
 
-  const [userCount, courseCount, incompleteCount] = await Promise.all([
+  const [userCount, allCourses, incompleteCount] = await Promise.all([
     prisma.user.count(),
-    prisma.course.count(),
+    container.cms.listCourses(),
     prisma.enrollment.count({ where: { completedAt: null } }),
   ]);
+
+  const courseCount = allCourses.length;
 
   const links = [
     {

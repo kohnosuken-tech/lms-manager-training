@@ -1,5 +1,7 @@
 import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
+import { AppError } from "@/lib/errors";
+import type { CmsPort } from "@/server/ports/cms";
 
 const DEFAULT_COMPLETION_RATE = 0.95;
 
@@ -12,23 +14,19 @@ export type UpsertProgressResult = {
  * 完了判定: watchedSec / durationSec >= (lesson.requiredCompletionRate ?? 0.95)
  *
  * 早送り抑止判定はここでは行わない (Route Handler 側で実施)。
+ * lesson.durationSec / requiredCompletionRate は CmsPort 経由で取得する。
  */
 export async function upsertProgress(
   userId: string,
   lessonId: string,
   watchedSec: number,
   lastPositionSec: number,
+  cms: CmsPort = container.cms,
 ): Promise<UpsertProgressResult> {
-  const lesson = await prisma.lesson.findUnique({
-    where: { id: lessonId },
-    select: {
-      id: true,
-      durationSec: true,
-      requiredCompletionRate: true,
-    },
-  });
+  const lesson = await cms.getLesson(lessonId);
   if (!lesson) {
-    throw new Error(`Lesson not found: ${lessonId}`);
+    // M-6: AppError に統一して API レスポンス整形ハンドラで適切に変換する
+    throw new AppError("LESSON_NOT_FOUND", "レッスンが見つかりません。", 404);
   }
 
   // 既存 progress を取得 (watchedSec を後退させない)
@@ -46,8 +44,8 @@ export async function upsertProgress(
   const newLastPosition = Math.max(0, lastPositionSec);
 
   const rate = lesson.requiredCompletionRate ?? DEFAULT_COMPLETION_RATE;
-  const ratio =
-    lesson.durationSec > 0 ? newWatched / lesson.durationSec : 0;
+  const durationSec = lesson.durationSec ?? 0;
+  const ratio = durationSec > 0 ? newWatched / durationSec : 0;
   const completed =
     existing?.completed === true ? true : ratio >= rate;
   const completedAt =
@@ -95,16 +93,16 @@ export type CourseProgressSummary = {
 
 /**
  * Course 単位の進捗集計を返す (一覧画面で使用)。
+ * Lesson 一覧は CmsPort 経由で取得する。
  */
 export async function getCourseProgress(
   userId: string,
   courseId: string,
+  cms: CmsPort = container.cms,
 ): Promise<CourseProgressSummary> {
-  const lessons = await prisma.lesson.findMany({
-    where: { courseId },
-    select: { id: true },
-    orderBy: { order: "asc" },
-  });
+  const cmsLessons = await cms.listLessons(courseId);
+  // order 順にソート
+  const lessons = [...cmsLessons].sort((a, b) => a.order - b.order);
   const lessonIds = lessons.map((l) => l.id);
 
   const progresses =

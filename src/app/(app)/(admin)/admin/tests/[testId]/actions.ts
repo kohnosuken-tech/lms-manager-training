@@ -2,7 +2,6 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import type { QuestionType } from "@prisma/client";
 import { requireAdmin } from "@/server/auth";
 import {
   addQuestion,
@@ -29,7 +28,7 @@ const QuestionPayloadSchema = z.object({
 
 export type AddQuestionPayload = {
   testId: string;
-  type: QuestionType;
+  type: "SINGLE" | "MULTIPLE";
   prompt: string;
   explanation: string;
   choices: { label: string; correct: boolean }[];
@@ -66,6 +65,7 @@ export async function updateQuestionAction(
   try {
     await updateQuestion(actor.id, {
       id: parsed.data.id,
+      testId: parsed.data.testId,
       type: parsed.data.type,
       prompt: parsed.data.prompt,
       explanation: parsed.data.explanation,
@@ -91,11 +91,63 @@ export async function deleteQuestionAction(
   const parsed = DeleteSchema.safeParse(payload);
   if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
   try {
-    await deleteQuestion(actor.id, parsed.data.id);
+    await deleteQuestion(actor.id, { id: parsed.data.id, testId: parsed.data.testId });
     revalidatePath(`/admin/tests/${parsed.data.testId}`);
     return ok(null);
   } catch (e) {
     if (e instanceof AppError) return err(e.code, e.message);
     return err("INTERNAL", "削除に失敗しました。");
+  }
+}
+
+const ReorderSchema = z.object({
+  testId: z.string().min(1),
+  idA: z.string().min(1),
+  orderA: z.number().int().min(0),
+  idB: z.string().min(1),
+  orderB: z.number().int().min(0),
+});
+
+export type ReorderQuestionPayload = {
+  testId: string;
+  idA: string;
+  orderA: number;
+  idB: string;
+  orderB: number;
+};
+
+/**
+ * 隣接する 2 設問の order を swap する。
+ * Phase E 以降 Question は CmsPort (read-only) のため、
+ * write は WRITE_NOT_SUPPORTED エラーが返る。
+ * この action も同様に assertWriteAllowed 経由で制限する。
+ */
+export async function reorderQuestionAction(
+  payload: ReorderQuestionPayload,
+): Promise<ApiResult<null>> {
+  await requireAdmin();
+  const parsed = ReorderSchema.safeParse(payload);
+  if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
+
+  try {
+    const { container } = await import("@/server/container");
+    const { testId, idA, idB } = parsed.data;
+
+    // CmsPort から設問を取得して所属テストを検証
+    const [qA, qB] = await Promise.all([
+      container.cms.getQuestion(idA),
+      container.cms.getQuestion(idB),
+    ]);
+    if (!qA || qA.testId !== testId) return err("NOT_FOUND", "設問が見つかりません。");
+    if (!qB || qB.testId !== testId) return err("NOT_FOUND", "設問が見つかりません。");
+
+    // Phase E 以降 Question の並び替えは Spreadsheet 側で直接編集してください
+    return err(
+      "WRITE_NOT_SUPPORTED",
+      "設問の並び替えは TSV fixture または Spreadsheet で直接編集してください。",
+    );
+  } catch (e) {
+    if (e instanceof AppError) return err(e.code, e.message);
+    return err("INTERNAL", "並び替えに失敗しました。");
   }
 }

@@ -1,9 +1,17 @@
 "use client";
 
 import { useActionState, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Label, RequiredLabel } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { createUserAction, type CreateUserActionState } from "./actions";
 
 const initialState: CreateUserActionState = {};
@@ -16,10 +24,14 @@ export function CreateUserForm() {
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
-    if (state?.successMessage && formRef.current) {
-      formRef.current.reset();
+    if (state?.successMessage) {
+      toast.success(state.successMessage);
+      formRef.current?.reset();
     }
-  }, [state?.successMessage]);
+    if (state?.error) {
+      toast.error(state.error);
+    }
+  }, [state?.successMessage, state?.error]);
 
   return (
     <form
@@ -30,36 +42,38 @@ export function CreateUserForm() {
       <h2 className="text-base font-medium">ユーザーを個別に作成</h2>
       <div className="grid gap-3 md:grid-cols-3">
         <div className="space-y-1">
-          <Label htmlFor="user-email">メールアドレス</Label>
+          <RequiredLabel htmlFor="user-email">メールアドレス</RequiredLabel>
           <Input
             id="user-email"
             name="email"
             type="email"
             required
+            aria-required="true"
             defaultValue={state?.values?.email ?? ""}
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="user-name">氏名</Label>
+          <RequiredLabel htmlFor="user-name">氏名</RequiredLabel>
           <Input
             id="user-name"
             name="name"
             required
+            aria-required="true"
             maxLength={100}
             defaultValue={state?.values?.name ?? ""}
           />
         </div>
         <div className="space-y-1">
           <Label htmlFor="user-role">ロール</Label>
-          <select
-            id="user-role"
-            name="role"
-            defaultValue={state?.values?.role ?? "STUDENT"}
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
-          >
-            <option value="STUDENT">受講者</option>
-            <option value="ADMIN">管理者</option>
-          </select>
+          <Select name="role" defaultValue={state?.values?.role ?? "STUDENT"}>
+            <SelectTrigger id="user-role">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="STUDENT">受講者</SelectItem>
+              <SelectItem value="ADMIN">管理者</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       {state?.error ? (

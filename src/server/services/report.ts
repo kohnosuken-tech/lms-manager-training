@@ -1,10 +1,13 @@
 /**
  * 管理者ダッシュボード用レポート集計サービス
  *
- * すべて Prisma の groupBy / count / aggregate で集約し、N+1 を避ける。
+ * Course / Lesson / Test の参照は CmsPort 経由。
+ * Enrollment / Submission の集計は Prisma を使い N+1 を避ける。
  */
 
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
+import type { CmsPort } from "@/server/ports/cms";
 
 export type CourseEnrollmentRate = {
   courseId: string;
@@ -29,16 +32,22 @@ export type AdminDashboardData = {
   overdueEnrollments: number;
 };
 
-export async function getAdminDashboard(): Promise<AdminDashboardData> {
+export async function getAdminDashboard(
+  cms: CmsPort = container.cms,
+): Promise<AdminDashboardData> {
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  // CmsPort からコース一覧を取得
+  const cmsCourses = await cms.listCourses();
+  const courseIds = cmsCourses.map((c) => c.id);
 
   // 並列実行でレイテンシを最小化
   const [
     totalEnrollments,
     completedEnrollments,
     overdueEnrollments,
-    courseGroupData,
+    enrollmentGroupData,
     submissionCounts,
   ] = await Promise.all([
     // 全 Enrollment 数
@@ -57,24 +66,15 @@ export async function getAdminDashboard(): Promise<AdminDashboardData> {
       },
     }),
 
-    // コースごとの Enrollment 集計
-    // groupBy で courseId ごとに全件数と完了件数を取得
-    prisma.course.findMany({
-      select: {
-        id: true,
-        title: true,
-        _count: {
-          select: {
-            enrollments: true,
-          },
-        },
-        enrollments: {
-          where: { completedAt: { not: null } },
-          select: { id: true },
-        },
-      },
-      orderBy: { order: "asc" },
-    }),
+    // コースごとの Enrollment 集計 (Prisma groupBy)
+    // CmsPort 既知の courseId でフィルタ
+    courseIds.length > 0
+      ? prisma.enrollment.groupBy({
+          by: ["courseId"],
+          where: { courseId: { in: courseIds } },
+          _count: { courseId: true },
+        })
+      : Promise.resolve([]),
 
     // 直近 30 日の Submission 集計
     prisma.submission.groupBy({
@@ -87,22 +87,37 @@ export async function getAdminDashboard(): Promise<AdminDashboardData> {
     }),
   ]);
 
-  // コースごとの完了率を算出
-  const courseEnrollmentRates: CourseEnrollmentRate[] = courseGroupData.map(
-    (c) => {
-      const total = c._count.enrollments;
-      const completed = c.enrollments.length;
-      const completionRate =
-        total === 0 ? 0 : Math.round((completed / total) * 100);
-      return {
-        courseId: c.id,
-        courseTitle: c.title,
-        totalEnrollments: total,
-        completedEnrollments: completed,
-        completionRate,
-      };
-    },
+  // コースごとの完了済み Enrollment 数を別途集計
+  const completedEnrollmentGroup =
+    courseIds.length > 0
+      ? await prisma.enrollment.groupBy({
+          by: ["courseId"],
+          where: { courseId: { in: courseIds }, completedAt: { not: null } },
+          _count: { courseId: true },
+        })
+      : [];
+
+  const totalByCoure = new Map(
+    enrollmentGroupData.map((e) => [e.courseId, e._count.courseId]),
   );
+  const completedByCourse = new Map(
+    completedEnrollmentGroup.map((e) => [e.courseId, e._count.courseId]),
+  );
+
+  // コースごとの完了率を算出 (CmsPort の順序を維持)
+  const courseEnrollmentRates: CourseEnrollmentRate[] = cmsCourses.map((c) => {
+    const total = totalByCoure.get(c.id) ?? 0;
+    const completed = completedByCourse.get(c.id) ?? 0;
+    const completionRate =
+      total === 0 ? 0 : Math.round((completed / total) * 100);
+    return {
+      courseId: c.id,
+      courseTitle: c.title,
+      totalEnrollments: total,
+      completedEnrollments: completed,
+      completionRate,
+    };
+  });
 
   // 全体の完了率
   const overallCompletionRate =

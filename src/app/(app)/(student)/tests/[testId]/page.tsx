@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import { startTestAction } from "./actions";
 
 type Params = { testId: string };
@@ -36,19 +37,16 @@ export default async function TestEntryPage({
   const { testId } = await params;
   const { error } = await searchParams;
 
-  const test = await prisma.test.findUnique({
-    where: { id: testId },
-    include: {
-      course: {
-        select: {
-          id: true,
-          title: true,
-          lessons: { select: { id: true } },
-        },
-      },
-    },
-  });
+  const [test, lessons] = await Promise.all([
+    container.cms.getTest(testId),
+    container.cms.listLessons(),
+  ]);
   if (!test || !test.published) notFound();
+
+  const course = await container.cms.getCourse(test.courseId);
+
+  // コースに属するレッスン
+  const courseLessons = lessons.filter((l) => l.courseId === test.courseId);
 
   // Enrollment チェック (ADMIN は素通し)
   if (user.role !== "ADMIN") {
@@ -61,7 +59,7 @@ export default async function TestEntryPage({
     if (!enrollment) redirect("/forbidden");
   }
 
-  const lessonIds = test.course.lessons.map((l) => l.id);
+  const lessonIds = courseLessons.map((l) => l.id);
   const completedLessons =
     lessonIds.length > 0
       ? await prisma.progress.count({
@@ -75,6 +73,8 @@ export default async function TestEntryPage({
   const allCompleted =
     lessonIds.length > 0 && completedLessons === lessonIds.length;
 
+  const maxAttempts = test.maxAttempts ?? 3;
+
   const finishedAttempts = await prisma.submission.count({
     where: {
       userId: user.id,
@@ -82,7 +82,7 @@ export default async function TestEntryPage({
       status: { in: ["PASSED", "FAILED", "SUBMITTED"] },
     },
   });
-  const remaining = Math.max(0, test.maxAttempts - finishedAttempts);
+  const remaining = Math.max(0, maxAttempts - finishedAttempts);
   const passed = await prisma.submission.findFirst({
     where: { userId: user.id, testId, status: "PASSED" },
     select: { id: true },
@@ -98,12 +98,9 @@ export default async function TestEntryPage({
           href={`/courses/${test.courseId}`}
           className="text-sm text-muted-foreground hover:underline"
         >
-          ← {test.course.title}
+          ← {course?.title ?? test.courseId}
         </Link>
         <h1 className="text-2xl font-semibold">{test.title}</h1>
-        {test.description ? (
-          <p className="text-sm text-muted-foreground">{test.description}</p>
-        ) : null}
       </div>
 
       {error ? (
@@ -121,7 +118,7 @@ export default async function TestEntryPage({
         <CardHeader>
           <CardTitle>受験情報</CardTitle>
           <CardDescription>
-            合格基準 {test.passingScore}% / 最大受験回数 {test.maxAttempts}
+            合格基準 {test.passingScore != null ? `${test.passingScore}%` : "-"} / 最大受験回数 {maxAttempts}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -130,7 +127,7 @@ export default async function TestEntryPage({
               レッスン {completedLessons} / {lessonIds.length} 完了
             </Badge>
             <Badge variant="secondary">
-              残り受験回数 {remaining} / {test.maxAttempts}
+              残り受験回数 {remaining} / {maxAttempts}
             </Badge>
             {passed ? <Badge>合格済み</Badge> : null}
           </div>
@@ -139,9 +136,6 @@ export default async function TestEntryPage({
             <li>設問・選択肢はランダムにシャッフルされます。</li>
             <li>部分点はありません。問題ごとの正解集合と完全一致のみ正解。</li>
             <li>提出後に解説が表示されます。</li>
-            {test.timeLimitSec ? (
-              <li>制限時間: {Math.round(test.timeLimitSec / 60)} 分</li>
-            ) : null}
           </ul>
 
           {!blocked ? (

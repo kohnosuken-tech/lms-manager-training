@@ -61,14 +61,16 @@ export default async function SignInPage() {
 
           <SignInForm />
 
-          <div className="rounded-md border bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">テスト用認証情報 (モック)</p>
-            <p>受講者: student1@example.com / student2@example.com</p>
-            <p>管理者: admin@example.com</p>
-            <p className="pt-1">
-              パスワードは任意の文字 (例: <code className="rounded bg-muted px-1 py-0.5">a</code>) で OK
-            </p>
-          </div>
+          {(process.env.APP_MODE === "stub" || process.env.NODE_ENV !== "production") && (
+            <div className="rounded-md border bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground">テスト用認証情報 (モック)</p>
+              <p>受講者: student1@example.com / student2@example.com</p>
+              <p>管理者: admin@example.com</p>
+              <p className="pt-1">
+                パスワードは任意の文字 (例: <code className="rounded bg-muted px-1 py-0.5">a</code>) で OK
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </main>

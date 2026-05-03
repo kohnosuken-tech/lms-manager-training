@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { RequiredLabel } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   bulkCreateUsersAction,
@@ -31,13 +31,14 @@ export function BulkCreateUsersForm() {
         ヘッダー行 <code>email,name,role</code> 必須。role は STUDENT / ADMIN。
       </p>
       <div className="space-y-1">
-        <Label htmlFor="csv">CSV テキスト</Label>
+        <RequiredLabel htmlFor="csv">CSV テキスト</RequiredLabel>
         <Textarea
           id="csv"
           name="csv"
           rows={6}
           placeholder={PLACEHOLDER}
           required
+          aria-required="true"
         />
       </div>
       {state?.error ? (

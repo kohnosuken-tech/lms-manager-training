@@ -2,6 +2,7 @@ import { prisma } from "@/server/repositories/db";
 import { container } from "@/server/container";
 import { AppError } from "@/lib/errors";
 import type { Prisma, SubmissionStatus } from "@prisma/client";
+import type { CmsPort } from "@/server/ports/cms";
 
 export type StartSubmissionResult = {
   submissionId: string;
@@ -11,35 +12,30 @@ export type StartSubmissionResult = {
 /**
  * テスト受験を開始する。
  *
- * - prerequisite Course が指定されていれば完了済みかチェック
- * - 全 Lesson 完了済みかチェック
- * - attempts < maxAttempts チェック
- * - 既に IN_PROGRESS のものがあれば再利用
+ * - Test の存在確認と prerequisite チェックは CmsPort 経由
+ * - Lesson の存在確認も CmsPort 経由 (listLessons)
+ * - Enrollment / Progress / Submission は Prisma のまま
  */
 export async function startSubmission(
   userId: string,
   testId: string,
+  cms: CmsPort = container.cms,
 ): Promise<StartSubmissionResult> {
-  const test = await prisma.test.findUnique({
-    where: { id: testId },
-    select: {
-      id: true,
-      courseId: true,
-      maxAttempts: true,
-      published: true,
-      prerequisiteCourseId: true,
-    },
-  });
-  if (!test) {
+  // Test の取得は CmsPort 経由
+  const cmsTest = await cms.getTest(testId);
+  if (!cmsTest) {
     throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
   }
-  if (!test.published) {
+  if (!cmsTest.published) {
     throw new AppError("NOT_FOUND", "テストが公開されていません。", 404);
   }
 
+  const courseId = cmsTest.courseId;
+  const maxAttempts = cmsTest.maxAttempts ?? 3;
+
   // 受講者がこの Course に Enrollment を持っているか
   const enrollment = await prisma.enrollment.findUnique({
-    where: { userId_courseId: { userId, courseId: test.courseId } },
+    where: { userId_courseId: { userId, courseId } },
     select: { id: true },
   });
   if (!enrollment) {
@@ -50,55 +46,29 @@ export async function startSubmission(
     );
   }
 
-  // 当該 Course の全 Lesson を完了しているかチェック
-  const lessons = await prisma.lesson.findMany({
-    where: { courseId: test.courseId },
-    select: { id: true },
-  });
-  if (lessons.length === 0) {
+  // 当該 Course の全 Lesson を完了しているかチェック (Lesson 一覧は CmsPort 経由)
+  const cmsLessons = await cms.listLessons(courseId);
+  if (cmsLessons.length === 0) {
     throw new AppError(
       "PREREQUISITE_NOT_MET",
       "受講可能なレッスンがありません。",
       422,
     );
   }
+  const lessonIds = cmsLessons.map((l) => l.id);
   const completedCount = await prisma.progress.count({
     where: {
       userId,
-      lessonId: { in: lessons.map((l) => l.id) },
+      lessonId: { in: lessonIds },
       completed: true,
     },
   });
-  if (completedCount < lessons.length) {
+  if (completedCount < cmsLessons.length) {
     throw new AppError(
       "PREREQUISITE_NOT_MET",
       "全レッスンを完了してから受験してください。",
       422,
     );
-  }
-
-  // prerequisite Course (別コース指定がある場合)
-  if (test.prerequisiteCourseId && test.prerequisiteCourseId !== test.courseId) {
-    const preLessons = await prisma.lesson.findMany({
-      where: { courseId: test.prerequisiteCourseId },
-      select: { id: true },
-    });
-    if (preLessons.length > 0) {
-      const preCompleted = await prisma.progress.count({
-        where: {
-          userId,
-          lessonId: { in: preLessons.map((l) => l.id) },
-          completed: true,
-        },
-      });
-      if (preCompleted < preLessons.length) {
-        throw new AppError(
-          "PREREQUISITE_NOT_MET",
-          "前提コースを修了してから受験してください。",
-          422,
-        );
-      }
-    }
   }
 
   // IN_PROGRESS の Submission があれば再利用
@@ -133,7 +103,7 @@ export async function startSubmission(
     );
   }
 
-  if (finishedAttempts >= test.maxAttempts) {
+  if (finishedAttempts >= maxAttempts) {
     throw new AppError(
       "ATTEMPTS_EXCEEDED",
       "受験回数の上限に達しました。",
@@ -172,13 +142,20 @@ export type SubmitSubmissionResult = {
 };
 
 /**
- * 提出 + 自動採点。部分点なし: 問題ごとに「選んだ集合」と「correct=true 集合」が
+ * 提出 + 自動採点。部分点なし: 問題ごとに「選んだ集合」と「isCorrect=true 集合」が
  * 完全一致のみ正解。
+ *
+ * M-4: testId を受け取り、Submission の testId と一致することを検証する。
+ * 不一致の場合は NOT_FOUND を返す (IDOR / ID 混同攻撃を防ぐ)。
+ *
+ * 採点で使う Question / Choice は CmsPort 経由で取得する (Phase E 移行後)。
  */
 export async function submitSubmission(
   submissionId: string,
   userId: string,
   answers: SubmitAnswer[],
+  expectedTestId?: string,
+  cms: CmsPort = container.cms,
 ): Promise<SubmitSubmissionResult> {
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
@@ -188,23 +165,13 @@ export async function submitSubmission(
       userId: true,
       status: true,
       attemptNo: true,
-      test: {
-        select: {
-          id: true,
-          passingScore: true,
-          questions: {
-            select: {
-              id: true,
-              choices: {
-                select: { id: true, correct: true },
-              },
-            },
-          },
-        },
-      },
     },
   });
   if (!submission) {
+    throw new AppError("NOT_FOUND", "提出が見つかりません。", 404);
+  }
+  // M-4: testId 整合検証 — Submission が期待する Test に紐づいているか確認する
+  if (expectedTestId !== undefined && submission.testId !== expectedTestId) {
     throw new AppError("NOT_FOUND", "提出が見つかりません。", 404);
   }
   if (submission.userId !== userId) {
@@ -218,13 +185,32 @@ export async function submitSubmission(
     );
   }
 
-  const totalQuestions = submission.test.questions.length;
+  // Test のメタデータ (passingScore) は CmsPort 経由で取得
+  const cmsTest = await cms.getTest(submission.testId);
+  if (!cmsTest) {
+    throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
+  }
+  const passingScore = cmsTest.passingScore ?? 70;
+
+  // Question / Choice は CmsPort 経由で取得
+  const cmsQuestions = await cms.listQuestions(submission.testId);
+  const totalQuestions = cmsQuestions.length;
   if (totalQuestions === 0) {
     throw new AppError(
       "VALIDATION_FAILED",
       "問題が登録されていません。",
       422,
     );
+  }
+
+  // Choice をすべて取得してルックアップマップを構築
+  const allChoices = await cms.listChoices();
+  const choicesByQuestion = new Map<string, { id: string; isCorrect: boolean }[]>();
+  for (const c of allChoices) {
+    if (!choicesByQuestion.has(c.questionId)) {
+      choicesByQuestion.set(c.questionId, []);
+    }
+    choicesByQuestion.get(c.questionId)!.push({ id: c.id, isCorrect: c.isCorrect });
   }
 
   const answerByQuestionId = new Map<string, Set<string>>();
@@ -235,9 +221,10 @@ export async function submitSubmission(
   let correctCount = 0;
   const answerRows: Prisma.AnswerCreateManyInput[] = [];
 
-  for (const q of submission.test.questions) {
+  for (const q of cmsQuestions) {
+    const questionChoices = choicesByQuestion.get(q.id) ?? [];
     const correctSet = new Set(
-      q.choices.filter((c) => c.correct).map((c) => c.id),
+      questionChoices.filter((c) => c.isCorrect).map((c) => c.id),
     );
     const chosen = answerByQuestionId.get(q.id) ?? new Set<string>();
 
@@ -255,7 +242,7 @@ export async function submitSubmission(
 
     // 選択した choice を Answer 行として保存
     // 不正な choiceId (この問題に属さない) は捨てる
-    const validChoiceIds = new Set(q.choices.map((c) => c.id));
+    const validChoiceIds = new Set(questionChoices.map((c) => c.id));
     for (const cid of chosen) {
       if (validChoiceIds.has(cid)) {
         answerRows.push({
@@ -269,7 +256,7 @@ export async function submitSubmission(
 
   const score = Math.round((correctCount / totalQuestions) * 100);
   const status: SubmissionStatus =
-    score >= submission.test.passingScore ? "PASSED" : "FAILED";
+    score >= passingScore ? "PASSED" : "FAILED";
 
   await prisma.$transaction([
     prisma.answer.deleteMany({ where: { submissionId } }),
@@ -303,47 +290,68 @@ export async function submitSubmission(
   return { score, status };
 }
 
+export type SubmissionResultQuestion = {
+  id: string;
+  prompt: string;
+  explanation: string;
+  type: "SINGLE" | "MULTIPLE";
+  order: number;
+  choices: {
+    id: string;
+    label: string;
+    correct: boolean;
+    order: number;
+  }[];
+};
+
+export type SubmissionResultTest = {
+  id: string;
+  title: string;
+  passingScore: number;
+  maxAttempts: number;
+  courseId: string;
+  courseTitle: string;
+  questions: SubmissionResultQuestion[];
+};
+
+export type SubmissionForResult = {
+  submission: {
+    id: string;
+    testId: string;
+    userId: string;
+    status: SubmissionStatus;
+    score: number | null;
+    attemptNo: number;
+    startedAt: Date;
+    submittedAt: Date | null;
+    answers: { questionId: string; choiceId: string }[];
+    test: SubmissionResultTest;
+  };
+  remainingAttempts: number;
+};
+
 /**
  * 結果ページ表示用: Submission + Question + Choice + Answer を取得する。
  * アクセス権 (本人 or ADMIN) は呼び出し側で渡された role と userId で検証する。
+ * Question / Choice は CmsPort 経由で取得する (Phase E 移行後)。
  */
 export async function getSubmissionForResult(
   submissionId: string,
   viewerUserId: string,
   viewerRole: "STUDENT" | "ADMIN",
-) {
+  cms: CmsPort = container.cms,
+): Promise<SubmissionForResult> {
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
-    include: {
-      test: {
-        select: {
-          id: true,
-          title: true,
-          passingScore: true,
-          maxAttempts: true,
-          courseId: true,
-          course: { select: { id: true, title: true } },
-          questions: {
-            orderBy: { order: "asc" },
-            select: {
-              id: true,
-              prompt: true,
-              explanation: true,
-              type: true,
-              order: true,
-              choices: {
-                orderBy: { order: "asc" },
-                select: {
-                  id: true,
-                  label: true,
-                  correct: true,
-                  order: true,
-                },
-              },
-            },
-          },
-        },
-      },
+    select: {
+      id: true,
+      testId: true,
+      userId: true,
+      status: true,
+      score: true,
+      attemptNo: true,
+      startedAt: true,
+      submittedAt: true,
       answers: {
         select: { questionId: true, choiceId: true },
       },
@@ -356,6 +364,53 @@ export async function getSubmissionForResult(
     throw new AppError("FORBIDDEN", "閲覧権限がありません。", 403);
   }
 
+  // Test / Course / Question / Choice を CmsPort から取得
+  const cmsTest = await cms.getTest(submission.testId);
+  if (!cmsTest) {
+    throw new AppError("NOT_FOUND", "テストが見つかりません。", 404);
+  }
+  const cmsCourse = await cms.getCourse(cmsTest.courseId);
+  const cmsQuestions = await cms.listQuestions(submission.testId);
+  const allChoices = await cms.listChoices();
+
+  // questionId → choices のマップ
+  const choicesByQuestion = new Map<string, { id: string; text: string; isCorrect: boolean; order: number }[]>();
+  for (const c of allChoices) {
+    if (!choicesByQuestion.has(c.questionId)) choicesByQuestion.set(c.questionId, []);
+    choicesByQuestion.get(c.questionId)!.push({ id: c.id, text: c.text, isCorrect: c.isCorrect, order: c.order });
+  }
+
+  const questions: SubmissionResultQuestion[] = cmsQuestions
+    .sort((a, b) => a.order - b.order)
+    .map((q) => {
+      const choices = (choicesByQuestion.get(q.id) ?? [])
+        .sort((a, b) => a.order - b.order)
+        .map((c) => ({
+          id:      c.id,
+          label:   c.text,
+          correct: c.isCorrect,
+          order:   c.order,
+        }));
+      return {
+        id:          q.id,
+        prompt:      q.text,
+        explanation: "", // TSV fixture には explanation がないため空文字
+        type:        q.type,
+        order:       q.order,
+        choices,
+      };
+    });
+
+  const testResult: SubmissionResultTest = {
+    id:           cmsTest.id,
+    title:        cmsTest.title,
+    passingScore: cmsTest.passingScore ?? 70,
+    maxAttempts:  cmsTest.maxAttempts ?? 3,
+    courseId:     cmsTest.courseId,
+    courseTitle:  cmsCourse?.title ?? "",
+    questions,
+  };
+
   // 残り受験可能回数を計算
   const finishedAttempts = await prisma.submission.count({
     where: {
@@ -366,8 +421,14 @@ export async function getSubmissionForResult(
   });
   const remainingAttempts = Math.max(
     0,
-    submission.test.maxAttempts - finishedAttempts,
+    testResult.maxAttempts - finishedAttempts,
   );
 
-  return { submission, remainingAttempts };
+  return {
+    submission: {
+      ...submission,
+      test: testResult,
+    },
+    remainingAttempts,
+  };
 }

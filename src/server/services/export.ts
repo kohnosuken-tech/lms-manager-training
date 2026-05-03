@@ -2,10 +2,13 @@
  * CSV エクスポート用 pure function 群
  *
  * 各関数は Prisma クエリを実行して行データを生成し、CSV 文字列を返す。
+ * Course / Lesson の名前解決は CmsPort 経由で行う。
  * UTF-8 BOM は呼び出し元 (Route Handler) で付与する。
  */
 
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
+import type { CmsPort } from "@/server/ports/cms";
 
 // ---------- 共通ヘルパー ----------
 
@@ -69,18 +72,23 @@ export async function buildUsersCsv(): Promise<string> {
 
 // ---------- courses CSV ----------
 
-export async function buildCoursesCsv(): Promise<string> {
-  const courses = await prisma.course.findMany({
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      published: true,
-      createdAt: true,
-      _count: { select: { lessons: true } },
-    },
-    orderBy: { order: "asc" },
-  });
+/**
+ * コース一覧 CSV を生成する。
+ * Course 情報は CmsPort 経由で取得し、Lesson 数も CmsPort から集計する。
+ */
+export async function buildCoursesCsv(
+  cms: CmsPort = container.cms,
+): Promise<string> {
+  const [cmsCourses, cmsLessons] = await Promise.all([
+    cms.listCourses(),
+    cms.listLessons(),
+  ]);
+
+  // Lesson 数をコースごとに集計
+  const lessonCountByCourse = new Map<string, number>();
+  for (const l of cmsLessons) {
+    lessonCountByCourse.set(l.courseId, (lessonCountByCourse.get(l.courseId) ?? 0) + 1);
+  }
 
   const header = csvRow([
     "id",
@@ -90,14 +98,14 @@ export async function buildCoursesCsv(): Promise<string> {
     "lessonCount",
     "createdAt",
   ]);
-  const rows = courses.map((c) =>
+  const rows = cmsCourses.map((c) =>
     csvRow([
       c.id,
       c.title,
       c.description,
       c.published,
-      c._count.lessons,
-      toIsoDateOrEmpty(c.createdAt),
+      lessonCountByCourse.get(c.id) ?? 0,
+      c.createdAt,
     ]),
   );
   return [header, ...rows].join("\r\n");
@@ -105,27 +113,41 @@ export async function buildCoursesCsv(): Promise<string> {
 
 // ---------- progress CSV ----------
 
-export async function buildProgressCsv(courseId?: string): Promise<string> {
-  // コース指定がある場合はそのコースのみ、なければ全コース
+/**
+ * 進捗 CSV を生成する。
+ * Progress は Prisma から取得し、Course / Lesson 名は CmsPort 経由で解決する。
+ */
+export async function buildProgressCsv(
+  courseId?: string,
+  cms: CmsPort = container.cms,
+): Promise<string> {
+  // CmsPort から Lesson 一覧を取得してルックアップマップを構築
+  const [cmsLessons, cmsCourses] = await Promise.all([
+    cms.listLessons(courseId),
+    cms.listCourses(),
+  ]);
+
+  const lessonMap = new Map(cmsLessons.map((l) => [l.id, l]));
+  const courseMap = new Map(cmsCourses.map((c) => [c.id, c]));
+
+  // Progress を Prisma から取得
+  // courseId が指定された場合は対象 Lesson の ID でフィルタ
+  const lessonIds = courseId ? cmsLessons.map((l) => l.id) : undefined;
+
   const progressList = await prisma.progress.findMany({
-    where: courseId
-      ? { lesson: { courseId } }
+    where: lessonIds !== undefined
+      ? { lessonId: { in: lessonIds } }
       : undefined,
     select: {
+      lessonId: true,
       watchedSec: true,
       completed: true,
       completedAt: true,
+      userId: true,
       user: { select: { email: true, name: true } },
-      lesson: {
-        select: {
-          title: true,
-          course: { select: { title: true } },
-        },
-      },
     },
     orderBy: [
       { user: { email: "asc" } },
-      { lesson: { course: { title: "asc" } } },
     ],
   });
 
@@ -138,16 +160,20 @@ export async function buildProgressCsv(courseId?: string): Promise<string> {
     "completed",
     "completedAt",
   ]);
-  const rows = progressList.map((p) =>
-    csvRow([
+
+  const rows = progressList.map((p) => {
+    const lesson = lessonMap.get(p.lessonId);
+    const course = lesson ? courseMap.get(lesson.courseId) : undefined;
+    return csvRow([
       p.user.email,
       p.user.name,
-      p.lesson.course.title,
-      p.lesson.title,
+      course?.title ?? "",
+      lesson?.title ?? "",
       p.watchedSec,
       p.completed,
       toIsoDateOrEmpty(p.completedAt),
-    ]),
-  );
+    ]);
+  });
+
   return [header, ...rows].join("\r\n");
 }

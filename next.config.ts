@@ -1,28 +1,15 @@
 import type { NextConfig } from "next";
 
+/**
+ * M-1: CSP の script-src は middleware で nonce を使って動的に付与する。
+ * next.config.ts の静的ヘッダから Content-Security-Policy を削除し、
+ * 'unsafe-inline' が漏れないようにする。
+ * その他のセキュリティヘッダは引き続き静的に付与する。
+ */
+
 const isProd = process.env.NODE_ENV === "production";
 
-const cspDirectives = [
-  "default-src 'self'",
-  // dev では React の開発支援機能が eval を必要とする
-  `script-src 'self' 'unsafe-inline' ${isProd ? "" : "'unsafe-eval' "}https://www.youtube.com https://www.youtube-nocookie.com`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.public.blob.vercel-storage.com https://i.ytimg.com",
-  "media-src 'self' blob: https://*.public.blob.vercel-storage.com",
-  "frame-src https://www.youtube-nocookie.com https://www.youtube.com",
-  "connect-src 'self' https://www.youtube.com",
-  "font-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ");
-
 const securityHeaders = [
-  {
-    key: "Content-Security-Policy",
-    value: cspDirectives,
-  },
   {
     key: "X-Content-Type-Options",
     value: "nosniff",

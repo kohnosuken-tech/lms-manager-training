@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import { CourseMetaForm } from "./course-meta-form";
 import { LessonsSection } from "./lessons-section";
 import { EnrollmentSection } from "./enrollment-section";
@@ -22,21 +23,20 @@ export default async function AdminCourseEditPage({
   await requireAdmin();
   const { courseId } = await params;
 
-  const course = await prisma.course.findUnique({
-    where: { id: courseId },
-    include: {
-      lessons: { orderBy: { order: "asc" } },
-      enrollments: {
-        include: {
-          user: { select: { id: true, name: true, email: true } },
-        },
-        orderBy: { assignedAt: "asc" },
+  const [course, lessons, enrollments] = await Promise.all([
+    container.cms.getCourse(courseId),
+    container.cms.listLessons(courseId),
+    prisma.enrollment.findMany({
+      where: { courseId },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
       },
-    },
-  });
+      orderBy: { assignedAt: "asc" },
+    }),
+  ]);
   if (!course) notFound();
 
-  const enrolledIds = new Set(course.enrollments.map((e) => e.userId));
+  const enrolledIds = new Set(enrollments.map((e) => e.userId));
   const candidates = await prisma.user.findMany({
     where: { deactivated: false, id: { notIn: [...enrolledIds] } },
     orderBy: [{ role: "asc" }, { name: "asc" }],
@@ -67,12 +67,12 @@ export default async function AdminCourseEditPage({
 
       <LessonsSection
         courseId={course.id}
-        lessons={course.lessons.map((l) => ({
+        lessons={lessons.map((l) => ({
           id: l.id,
           title: l.title,
           description: l.description,
           videoUrl: l.videoUrl,
-          durationSec: l.durationSec,
+          durationSec: l.durationSec ?? 0,
           order: l.order,
           blockSeek: l.blockSeek,
           requiredCompletionRate: l.requiredCompletionRate,
@@ -81,7 +81,7 @@ export default async function AdminCourseEditPage({
 
       <EnrollmentSection
         courseId={course.id}
-        enrolled={course.enrollments.map((e) => ({
+        enrolled={enrollments.map((e) => ({
           userId: e.userId,
           email: e.user.email,
           name: e.user.name,

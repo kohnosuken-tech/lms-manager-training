@@ -141,4 +141,31 @@ describe("bulkCreateUsers", () => {
     expect(result.created).toBe(1);
     expect(result.errors).toHaveLength(0);
   });
+
+  it("C-3: ダブルクォート内のカンマは分割されず正しくパースされる", async () => {
+    // name フィールドに「山田, 太郎」のようにカンマを含む場合、
+    // CSV インジェクション対策として csv-parse が正しく処理することを検証する
+    const csv = [
+      "email,name,role",
+      '"quoted@example.com","山田, 太郎",STUDENT',
+    ].join("\n");
+
+    const result = await bulkCreateUsers(ACTOR_ID, csv);
+
+    expect(result.created).toBe(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it("C-3: 先頭が = の name を持つ CSV 行が正常に取り込まれる (インジェクション文字の無害化はエクスポート側で行う)", async () => {
+    const csv = [
+      "email,name,role",
+      '"formula@example.com","=SUM(A1)",STUDENT',
+    ].join("\n");
+
+    const result = await bulkCreateUsers(ACTOR_ID, csv);
+
+    // インポート自体はブロックしない (エクスポート時に無害化)
+    expect(result.created).toBe(1);
+    expect(result.errors).toHaveLength(0);
+  });
 });

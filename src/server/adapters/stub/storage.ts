@@ -24,6 +24,8 @@ export const stubStorage: StoragePort = {
     const key = `${randomUUID()}-${safeFilename}`;
     return {
       uploadUrl: `/api/admin/upload-blob/${key}`,
+      // blobUrl は認可エンドポイント経由で配信するパスを格納する。
+      // /uploads/ 直接アクセスは次の Route Handler が Enrollment を検証してから提供する。
       blobUrl: `/uploads/${key}`,
     };
   },

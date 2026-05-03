@@ -31,4 +31,11 @@
 ```
 
 ## 既存 ADR
-(まだなし — Phase 1 で `architect` が作成する)
+
+| 番号 | タイトル | Status |
+| --- | --- | --- |
+| 0001 | Mock-first 戦略 | Accepted |
+| 0002 | 認証は stub から Clerk へ port 経由で差し替える | Accepted |
+| 0003 | Course / Lesson / Test 定義データの CMS に Google Spreadsheet (GAS Web App 経由) を採用する | Accepted |
+| 0004 | User / Progress / Submission / AuditLog はリレーショナル DB に残す | Accepted |
+| 0005 | GAS Web App を CMS 読取 + メール送信の統合リレーとして使う | Accepted |

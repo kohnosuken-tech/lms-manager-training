@@ -51,6 +51,8 @@ declare global {
 
 const SAVE_INTERVAL_MS = 10_000; // FILE と同じ 10 秒
 const SEEK_TOLERANCE_SEC = 5;
+/** 連続失敗がこの回数に達したら「オフラインモード」警告を表示 */
+const OFFLINE_THRESHOLD = 3;
 
 // ---------------------------------------------------------------------------
 // Props
@@ -160,8 +162,11 @@ export function YouTubePlayer({
   const [watchedSec, setWatchedSec] = useState(initialWatchedSec);
   const [completed, setCompleted] = useState(initialCompleted);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
   const [apiLoadError, setApiLoadError] = useState(false);
   const [apiReady, setApiReady] = useState(false);
+  // 連続ネットワーク失敗カウンタ
+  const consecutiveFailRef = useRef<number>(0);
 
   // durationSec が 0 の場合は IFrame から取得する
   const [resolvedDuration, setResolvedDuration] = useState(
@@ -201,13 +206,24 @@ export function YouTubePlayer({
           return;
         }
         dirtyRef.current = false;
+        consecutiveFailRef.current = 0;
+        setOfflineMode(false);
         if (json.data.completed && !completedRef.current) {
           completedRef.current = true;
           setCompleted(true);
           onCompleted?.();
         }
       } catch {
-        // ネットワークエラーは無視 (次回の周期で再送)
+        // ネットワークエラー: 連続失敗カウントを更新して警告表示
+        consecutiveFailRef.current += 1;
+        if (consecutiveFailRef.current >= OFFLINE_THRESHOLD) {
+          setOfflineMode(true);
+          setErrorMessage(
+            "進捗の保存に失敗しました。接続を確認してください。(オフラインモード)",
+          );
+        } else {
+          setErrorMessage("進捗の保存に失敗しました。接続を確認してください。");
+        }
       }
     },
     [lessonId, onCompleted],
@@ -405,6 +421,7 @@ export function YouTubePlayer({
           className="aspect-video w-full"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
+          sandbox="allow-scripts allow-same-origin allow-presentation"
         />
       </div>
 
@@ -448,6 +465,11 @@ export function YouTubePlayer({
           className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
         >
           {errorMessage}
+          {offlineMode ? (
+            <span className="ml-2 font-semibold">
+              [オフラインモード: 接続が回復したら自動再開します]
+            </span>
+          ) : null}
         </div>
       ) : null}
 

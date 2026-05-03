@@ -63,9 +63,13 @@ playwright/.cache/
 *.swp
 *.swo
 
-# uploaded video files (mock storage)
+# uploaded video files (mock storage — public 配下は廃止、.uploads/ を使用)
 public/uploads/*
 !public/uploads/.gitkeep
+
+# mock storage: private uploads directory (認可ガードなし URL で配信しない)
+.uploads/*
+!.uploads/.gitkeep
 
 # Claude Code
 .claude/scheduled_tasks.lock

@@ -3,7 +3,7 @@
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { RequiredLabel } from "@/components/ui/label";
 import { signInAction, type SignInActionState } from "./actions";
 
 const initialState: SignInActionState = {};
@@ -17,24 +17,26 @@ export function SignInForm() {
   return (
     <form action={formAction} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="email">メールアドレス</Label>
+        <RequiredLabel htmlFor="email">メールアドレス</RequiredLabel>
         <Input
           id="email"
           name="email"
           type="email"
           autoComplete="email"
           required
+          aria-required="true"
           defaultValue={state?.values?.email ?? ""}
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="password">パスワード</Label>
+        <RequiredLabel htmlFor="password">パスワード</RequiredLabel>
         <Input
           id="password"
           name="password"
           type="password"
           autoComplete="current-password"
           required
+          aria-required="true"
         />
       </div>
       {state?.error ? (

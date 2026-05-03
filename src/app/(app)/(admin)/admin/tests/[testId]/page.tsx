@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireAdmin } from "@/server/auth";
-import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import { TestMetaForm } from "./test-meta-form";
 import { QuestionsSection } from "./questions-section";
 
@@ -17,25 +17,25 @@ export default async function AdminTestEditPage({
   await requireAdmin();
   const { testId } = await params;
 
-  const [test, courses] = await Promise.all([
-    prisma.test.findUnique({
-      where: { id: testId },
-      include: {
-        course: { select: { id: true, title: true } },
-        questions: {
-          orderBy: { order: "asc" },
-          include: {
-            choices: { orderBy: { order: "asc" } },
-          },
-        },
-      },
-    }),
-    prisma.course.findMany({
-      orderBy: { order: "asc" },
-      select: { id: true, title: true },
-    }),
+  const [test, courses, questions, allChoices] = await Promise.all([
+    container.cms.getTest(testId),
+    container.cms.listCourses(),
+    container.cms.listQuestions(testId),
+    container.cms.listChoices(),
   ]);
   if (!test) notFound();
+
+  const course = await container.cms.getCourse(test.courseId);
+
+  // questionId -> choices のマップを構築
+  const choicesByQuestion = new Map<string, typeof allChoices>();
+  for (const c of allChoices) {
+    const arr = choicesByQuestion.get(c.questionId) ?? [];
+    arr.push(c);
+    choicesByQuestion.set(c.questionId, arr);
+  }
+
+  const sortedCourses = [...courses].sort((a, b) => a.order - b.order);
 
   return (
     <div className="space-y-6">
@@ -43,7 +43,7 @@ export default async function AdminTestEditPage({
         <div>
           <h1 className="text-2xl font-semibold">{test.title}</h1>
           <p className="text-sm text-muted-foreground">
-            コース: <Badge variant="outline">{test.course.title}</Badge>
+            コース: <Badge variant="outline">{course?.title ?? test.courseId}</Badge>
           </p>
         </div>
         <Button asChild variant="outline" size="sm">
@@ -55,30 +55,34 @@ export default async function AdminTestEditPage({
         test={{
           id: test.id,
           title: test.title,
-          description: test.description,
-          passingScore: test.passingScore,
-          maxAttempts: test.maxAttempts,
-          timeLimitSec: test.timeLimitSec,
-          prerequisiteCourseId: test.prerequisiteCourseId,
+          description: "",
+          passingScore: test.passingScore ?? 70,
+          maxAttempts: test.maxAttempts ?? 3,
+          timeLimitSec: null,
+          prerequisiteCourseId: null,
           published: test.published,
         }}
-        courses={courses}
+        courses={sortedCourses.map((c) => ({ id: c.id, title: c.title }))}
       />
 
       <QuestionsSection
         testId={test.id}
-        questions={test.questions.map((q) => ({
-          id: q.id,
-          type: q.type,
-          prompt: q.prompt,
-          explanation: q.explanation,
-          order: q.order,
-          choices: q.choices.map((c) => ({
-            id: c.id,
-            label: c.label,
-            correct: c.correct,
-          })),
-        }))}
+        questions={questions
+          .sort((a, b) => a.order - b.order)
+          .map((q) => ({
+            id: q.id,
+            type: q.type,
+            prompt: q.text,
+            explanation: "",
+            order: q.order,
+            choices: (choicesByQuestion.get(q.id) ?? [])
+              .sort((a, b) => a.order - b.order)
+              .map((c) => ({
+                id: c.id,
+                label: c.text,
+                correct: c.isCorrect,
+              })),
+          }))}
       />
     </div>
   );

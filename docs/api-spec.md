@@ -104,3 +104,105 @@
 | `ATTEMPTS_EXCEEDED` | 再受験上限超過 |
 | `PREREQUISITE_NOT_MET` | 受講条件未達 |
 | `INTERNAL` | 想定外エラー |
+
+---
+
+## 6. GAS Web App API (LMS ⇔ GAS リレー) — ADR 0005
+
+> 2026-05-02 追加。LMS の **外向き** API 仕様。GAS Web App URL に対して LMS が POST する。
+> エンドユーザー (ブラウザ) は本 API を直接叩かない。
+
+### 6.1 エンドポイント
+
+- URL: `process.env.GAS_WEBAPP_URL` (例: `https://script.google.com/macros/s/AKfy.../exec`)
+- メソッド: `POST` 固定 (GAS Web App は単一 entrypoint)
+- Content-Type: `application/json`
+- 認証: HMAC-SHA256 (詳細 §6.3)
+
+### 6.2 共通レスポンス形式
+
+```ts
+type GasResponse<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string } };
+```
+
+HTTP ステータスは GAS Web App の制約上常に `200`。`ok` フィールドで分岐すること。
+
+### 6.3 認証 (必須)
+
+リクエストに以下を **2 系統** (ヘッダ + クエリ) で付与する。GAS 側の HTTP ヘッダ受信仕様の制限に対する保険。
+
+| 名前 | 内容 | ヘッダ名 | クエリ名 |
+| --- | --- | --- | --- |
+| timestamp | `Date.now()` の文字列 | `X-Timestamp` | `ts` |
+| signature | `hex(HMAC-SHA256(ts + "." + raw_body, GAS_SECRET))` (lowercase) | `X-Signature` | `sig` |
+
+検証ルール (GAS 側):
+- `Math.abs(now - ts) > 5 分` → `EXPIRED_TIMESTAMP`
+- 署名不一致 → `INVALID_SIGNATURE`
+- constant time compare で照合
+
+### 6.4 action 一覧
+
+| action | params | 戻り data | 備考 |
+| --- | --- | --- | --- |
+| `list_courses` | `{}` | `CourseDto[]` | 全件返却 |
+| `list_lessons` | `{ courseId? }` | `LessonDto[]` | `courseId` 指定で絞り込み |
+| `list_tests` | `{ courseId? }` | `TestDto[]` | |
+| `list_questions` | `{ testId? }` | `QuestionDto[]` | |
+| `list_choices` | `{ questionId? }` | `ChoiceDto[]` | |
+| `send_mail` | `{ to: string; subject: string; body: string; idempotencyKey: string }` | `{ accepted: true; deduped?: boolean }` | `idempotencyKey` で 24h 重複抑止 |
+
+DTO 型は `docs/architecture.md` §8.3 (CmsPort) 参照。
+
+### 6.5 リクエスト例 (curl)
+
+```bash
+TS=$(node -e 'process.stdout.write(String(Date.now()))')
+BODY='{"action":"list_courses"}'
+SIG=$(node -e "const c=require('crypto');process.stdout.write(c.createHmac('sha256', process.env.GAS_SECRET).update('${TS}.'+'${BODY}').digest('hex'))")
+
+curl -sS -X POST "${GAS_WEBAPP_URL}?ts=${TS}&sig=${SIG}" \
+  -H "Content-Type: application/json" \
+  -H "X-Timestamp: ${TS}" \
+  -H "X-Signature: ${SIG}" \
+  --data "${BODY}"
+# → {"ok":true,"data":[{"id":"c1","title":"...","published":true,...}, ...]}
+```
+
+### 6.6 LMS 側エラーコード (adapter で発生)
+
+| code | 意味 |
+| --- | --- |
+| `CMS_UNREACHABLE` | GAS Web App に到達不能 (DNS / network) |
+| `CMS_INVALID_RESPONSE` | レスポンスが JSON でない / `ok` フィールドがない |
+| `CMS_SCHEMA_MISMATCH` | DTO の zod 検証失敗 (列が足りない、型が違う等) |
+| `CMS_REMOTE_ERROR` | GAS が `{ ok: false, error }` を返した。`error.code` を内包 |
+
+### 6.7 GAS 側エラーコード (上に再掲)
+
+| code | 意味 |
+| --- | --- |
+| `INVALID_SIGNATURE` | HMAC 不一致 |
+| `EXPIRED_TIMESTAMP` | timestamp が 5 分以上ずれている |
+| `BAD_REQUEST` | action 不明 / params 不足 / JSON parse 失敗 |
+| `NOT_FOUND` | 指定 id がシートに存在しない (将来拡張) |
+| `MAIL_FAILED` | `MailApp.sendEmail` が throw |
+| `INTERNAL` | その他 (シート欠損、`GAS_SECRET` 未設定など) |
+
+### 6.8 環境変数 (LMS 側)
+
+| 名前 | 例 | 用途 |
+| --- | --- | --- |
+| `GAS_WEBAPP_URL` | `https://script.google.com/macros/s/.../exec` | リレー先 URL |
+| `GAS_SECRET` | (32+ chars random) | HMAC 共有秘密 |
+| `CMS_SOURCE` | `sqlite` \| `spreadsheet` | デフォルト CMS 解決先 |
+| `CMS_SOURCE_COURSE` | (任意) | エンティティ単位の上書き |
+| `CMS_SOURCE_LESSON` | (任意) | |
+| `CMS_SOURCE_TEST` | (任意) | |
+| `CMS_SOURCE_QUESTION` | (任意) | |
+| `CMS_SOURCE_CHOICE` | (任意) | |
+| `MAIL_DRIVER` | `console` \| `gas` \| `resend` | メール送信 driver |
+| `SPREADSHEET_ID` | (Google Sheets の ID) | (参考: GAS が `SpreadsheetApp.getActive()` で解決するため LMS 側では未使用) |
+

@@ -11,35 +11,53 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 
 export const metadata = { title: "ダッシュボード | LMS" };
 
 export default async function DashboardPage() {
   const user = await requireUser();
 
-  // 担当コース一覧 (Enrollment 経由で Course と Lesson と Test を取得)
+  // Enrollment を取得 (courseId のみ)
   const enrollments = await prisma.enrollment.findMany({
     where: { userId: user.id },
-    include: {
-      course: {
-        include: {
-          lessons: { select: { id: true } },
-          tests: {
-            where: { published: true },
-            select: { id: true },
-          },
-        },
-      },
-    },
     orderBy: { assignedAt: "asc" },
   });
 
+  // CmsPort からコース・レッスン・テストを一括取得 (N+1 回避)
+  const [allCourses, allLessons, allTests] = await Promise.all([
+    container.cms.listCourses(),
+    container.cms.listLessons(),
+    container.cms.listTests(),
+  ]);
+
+  const courseMap = new Map(allCourses.map((c) => [c.id, c]));
+
+  // コースごとのレッスン一覧
+  const lessonsByCourse = new Map<string, typeof allLessons>();
+  for (const l of allLessons) {
+    const arr = lessonsByCourse.get(l.courseId) ?? [];
+    arr.push(l);
+    lessonsByCourse.set(l.courseId, arr);
+  }
+
+  // コースごとの公開テスト一覧
+  const testsByCourse = new Map<string, typeof allTests>();
+  for (const t of allTests) {
+    if (!t.published) continue;
+    const arr = testsByCourse.get(t.courseId) ?? [];
+    arr.push(t);
+    testsByCourse.set(t.courseId, arr);
+  }
+
   // ユーザーの全 Progress を一括取得 (N+1 回避)
-  const lessonIds = enrollments.flatMap((e) => e.course.lessons.map((l) => l.id));
+  const enrolledLessonIds = enrollments.flatMap(
+    (e) => (lessonsByCourse.get(e.courseId) ?? []).map((l) => l.id),
+  );
   const progresses =
-    lessonIds.length > 0
+    enrolledLessonIds.length > 0
       ? await prisma.progress.findMany({
-          where: { userId: user.id, lessonId: { in: lessonIds } },
+          where: { userId: user.id, lessonId: { in: enrolledLessonIds } },
           select: { lessonId: true, completed: true },
         })
       : [];
@@ -48,8 +66,8 @@ export default async function DashboardPage() {
   );
 
   // ユーザーの PASSED Submission を一括取得 (test pass バッジ用)
-  const allTestIds = enrollments.flatMap((e) =>
-    e.course.tests.map((t) => t.id),
+  const allTestIds = enrollments.flatMap(
+    (e) => (testsByCourse.get(e.courseId) ?? []).map((t) => t.id),
   );
   const passedSubs =
     allTestIds.length > 0
@@ -65,17 +83,20 @@ export default async function DashboardPage() {
   const passedTestSet = new Set(passedSubs.map((s) => s.testId));
 
   const courseCards = enrollments.map((e) => {
-    const total = e.course.lessons.length;
-    const completed = e.course.lessons.filter((l) =>
-      completedSet.has(l.id),
-    ).length;
+    const course = courseMap.get(e.courseId);
+    const courseLessons = lessonsByCourse.get(e.courseId) ?? [];
+    const courseTests = testsByCourse.get(e.courseId) ?? [];
+
+    const total = courseLessons.length;
+    const completed = courseLessons.filter((l) => completedSet.has(l.id)).length;
     const pct = total === 0 ? 0 : Math.round((completed / total) * 100);
-    const courseTestIds = e.course.tests.map((t) => t.id);
+    const courseTestIds = courseTests.map((t) => t.id);
     const hasPassedTest = courseTestIds.some((tid) => passedTestSet.has(tid));
+
     return {
-      id: e.course.id,
-      title: e.course.title,
-      description: e.course.description,
+      id: e.courseId,
+      title: course?.title ?? e.courseId,
+      description: course?.description ?? "",
       total,
       completed,
       pct,

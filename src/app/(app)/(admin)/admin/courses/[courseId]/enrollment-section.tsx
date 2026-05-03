@@ -1,10 +1,12 @@
 "use client";
 
 import { useActionState, useTransition, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -13,6 +15,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   assignCourseAction,
   unassignCourseAction,
@@ -60,15 +72,16 @@ export function EnrollmentSection({
           <div className="grid gap-2 md:grid-cols-3">
             <div className="space-y-1 md:col-span-2">
               <Label>未割当のユーザー (チェックして追加)</Label>
-              <div className="max-h-48 overflow-auto rounded-md border bg-background p-2 text-sm">
+              <fieldset className="max-h-48 overflow-auto rounded-md border bg-background p-2 text-sm">
+                <legend className="sr-only">割り当てるユーザーを選択</legend>
                 {candidates.map((c) => (
                   <label key={c.id} className="flex items-center gap-2 py-1">
-                    <input type="checkbox" name="userIds" value={c.id} />
+                    <Checkbox name="userIds" value={c.id} />
                     <span className="font-medium">{c.name}</span>
                     <span className="text-muted-foreground">({c.email})</span>
                   </label>
                 ))}
-              </div>
+              </fieldset>
             </div>
             <div className="space-y-1">
               <Label htmlFor="due-at">期限 (任意)</Label>
@@ -127,16 +140,20 @@ function UnassignRow({
   row: EnrolledRow;
 }) {
   const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
-  const onUnassign = () => {
-    if (!confirm(`${row.name} の割当を解除します。よろしいですか?`)) return;
+  const onConfirmUnassign = () => {
     const fd = new FormData();
     fd.set("courseId", courseId);
     fd.set("userId", row.userId);
+    setDialogOpen(false);
     start(async () => {
       const r = await unassignCourseAction(fd);
-      if (!r.ok) setError(r.error.message);
+      if (r.ok) {
+        toast.success(`${row.name} の割当を解除しました`);
+      } else {
+        toast.error(r.error.message);
+      }
     });
   };
 
@@ -158,14 +175,27 @@ function UnassignRow({
           type="button"
           size="xs"
           variant="destructive"
-          onClick={onUnassign}
+          onClick={() => setDialogOpen(true)}
           disabled={pending}
         >
-          {pending ? "..." : "割当解除"}
+          {pending ? "解除中..." : "割当解除"}
         </Button>
-        {error ? (
-          <span className="ml-2 text-xs text-destructive">{error}</span>
-        ) : null}
+        <AlertDialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>受講者の割当を解除しますか?</AlertDialogTitle>
+              <AlertDialogDescription>
+                <strong>{row.name}</strong> をこのコースから外します。視聴済みの進捗データは保持されますが、コース一覧には表示されなくなります。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>キャンセル</AlertDialogCancel>
+              <AlertDialogAction onClick={onConfirmUnassign}>
+                割当を解除する
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </TableCell>
     </TableRow>
   );

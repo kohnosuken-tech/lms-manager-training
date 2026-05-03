@@ -5,6 +5,9 @@
 //   本番切替時は provider を "postgresql" に変更し DATABASE_URL を Neon に向ける。
 // - 互換性のため Json 型は使用しない (文字列 + zod パース)。@db.* も付けない。
 // - 主要な検索パスに合わせて複合インデックスを定義済み。
+// - Phase E: Course / Lesson / Test / Question / Choice は CmsPort (TSV fixture) へ移行。
+//   Enrollment / Progress / Submission / Answer の courseId / lessonId / testId / questionId /
+//   choiceId は string FK として保持 (Prisma relation は不要)。
 
 generator client {
   provider = "prisma-client-js"
@@ -20,11 +23,6 @@ datasource db {
 enum Role {
   STUDENT
   ADMIN
-}
-
-enum QuestionType {
-  SINGLE
-  MULTIPLE
 }
 
 enum SubmissionStatus {
@@ -58,14 +56,15 @@ enum AuditAction {
 // ---------- Core entities ----------
 
 model User {
-  id           String   @id @default(cuid())
-  clerkUserId  String?  @unique // モックでは null 可、本番で Clerk と紐付け
-  email        String   @unique
-  name         String
-  role         Role     @default(STUDENT)
-  deactivated  Boolean  @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(cuid())
+  clerkUserId    String?  @unique // モックでは null 可、本番で Clerk と紐付け
+  email          String   @unique
+  name           String
+  role           Role     @default(STUDENT)
+  deactivated    Boolean  @default(false)
+  sessionVersion Int      @default(1) // H-2: JWT revoke 用バージョン番号
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   enrollments  Enrollment[]
   progresses   Progress[]
@@ -75,51 +74,15 @@ model User {
   @@index([role, deactivated])
 }
 
-model Course {
-  id          String   @id @default(cuid())
-  title       String
-  description String
-  order       Int      @default(0)
-  published   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  lessons     Lesson[]
-  enrollments Enrollment[]
-  tests       Test[]
-
-  @@index([published, order])
-}
-
-model Lesson {
-  id                      String   @id @default(cuid())
-  courseId                String
-  title                   String
-  description             String   @default("")
-  videoUrl                String   // モックでは "/sample.mp4"、本番は Blob URL
-  durationSec             Int      @default(0)
-  order                   Int      @default(0)
-  blockSeek               Boolean  @default(false) // 早送り抑止
-  requiredCompletionRate  Float?   // null の場合はデフォルト 0.95
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
-
-  course      Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  progresses  Progress[]
-
-  @@index([courseId, order])
-}
-
 model Enrollment {
-  id         String   @id @default(cuid())
-  userId     String
-  courseId   String
-  assignedAt DateTime @default(now())
-  dueAt      DateTime?
+  id          String    @id @default(cuid())
+  userId      String
+  courseId    String    // CmsPort の Course.id を string FK として保持
+  assignedAt  DateTime  @default(now())
+  dueAt       DateTime?
   completedAt DateTime?
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, courseId])
   @@index([userId, completedAt])
@@ -128,77 +91,26 @@ model Enrollment {
 }
 
 model Progress {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   userId          String
-  lessonId        String
-  watchedSec      Int      @default(0)   // 累計視聴秒
-  lastPositionSec Int      @default(0)   // 最後の再生位置
-  completed       Boolean  @default(false)
+  lessonId        String    // CmsPort の Lesson.id を string FK として保持
+  watchedSec      Int       @default(0)   // 累計視聴秒
+  lastPositionSec Int       @default(0)   // 最後の再生位置
+  completed       Boolean   @default(false)
   completedAt     DateTime?
-  updatedAt       DateTime @updatedAt
+  updatedAt       DateTime  @updatedAt
 
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, lessonId])
   @@index([userId, completed])
 }
 
-// ---------- Test / Submission ----------
-
-model Test {
-  id                  String   @id @default(cuid())
-  courseId            String
-  title               String
-  description         String   @default("")
-  prerequisiteCourseId String? // 受講条件 (このコース完了で受験可)
-  passingScore        Int      @default(70) // 0-100
-  maxAttempts         Int      @default(3)
-  timeLimitSec        Int?     // 任意のタイムリミット (null = 無制限)
-  shuffleQuestions    Boolean  @default(true)
-  shuffleChoices      Boolean  @default(true)
-  published           Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-
-  course      Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  questions   Question[]
-  submissions Submission[]
-
-  @@index([courseId, published])
-}
-
-model Question {
-  id          String       @id @default(cuid())
-  testId      String
-  type        QuestionType @default(SINGLE)
-  prompt      String
-  explanation String       @default("") // 提出後に表示する解説
-  order       Int          @default(0)
-
-  test    Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
-  choices Choice[]
-  answers Answer[]
-
-  @@index([testId, order])
-}
-
-model Choice {
-  id         String  @id @default(cuid())
-  questionId String
-  label      String
-  correct    Boolean @default(false)
-  order      Int     @default(0)
-
-  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  answers  Answer[]
-
-  @@index([questionId, order])
-}
+// ---------- Submission ----------
 
 model Submission {
   id          String           @id @default(cuid())
-  testId      String
+  testId      String           // CmsPort の Test.id を string FK として保持
   userId      String
   status      SubmissionStatus @default(IN_PROGRESS)
   score       Int?             // 0-100
@@ -206,8 +118,7 @@ model Submission {
   startedAt   DateTime         @default(now())
   submittedAt DateTime?
 
-  test    Test    @relation(fields: [testId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   answers Answer[]
 
   @@index([testId, userId])
@@ -215,14 +126,12 @@ model Submission {
 }
 
 model Answer {
-  id           String  @id @default(cuid())
+  id           String @id @default(cuid())
   submissionId String
-  questionId   String
-  choiceId     String  // 単一行 = 1 つの選択。複数選択時は Answer を複数行作る
+  questionId   String // CmsPort の Question.id を string FK として保持
+  choiceId     String // CmsPort の Choice.id を string FK として保持
 
   submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  question   Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  choice     Choice     @relation(fields: [choiceId], references: [id], onDelete: Cascade)
 
   @@unique([submissionId, questionId, choiceId])
   @@index([submissionId])
@@ -237,6 +146,8 @@ model AuditLog {
   target    String?     // 対象エンティティの参照 (例: "Course:abc123")
   diff      String      @default("") // JSON 文字列。zod でパースして利用
   at        DateTime    @default(now())
+  prevHash  String?     // 直前のレコードの hash (最初のレコードは null)
+  hash      String      @default("") // このレコード自体の SHA-256 hex
 
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
 

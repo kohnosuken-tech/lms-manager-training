@@ -5,7 +5,7 @@
  * actor (User) を include で一括取得して N+1 を回避する。
  */
 
-import type { AuditAction } from "@prisma/client";
+import type { AuditAction, Prisma } from "@prisma/client";
 import { prisma } from "@/server/repositories/db";
 
 export type AuditLogItem = {
@@ -25,6 +25,12 @@ export type ListAuditLogsInput = {
   cursor?: string; // AuditLog.id — このレコードより古いものを返す
   action?: AuditAction;
   limit?: number;
+  /** actorId または actor.email の部分一致 */
+  actor?: string;
+  /** 範囲フィルタ: この日時以降 */
+  from?: Date;
+  /** 範囲フィルタ: この日時以前 */
+  to?: Date;
 };
 
 export type ListAuditLogsResult = {
@@ -46,20 +52,72 @@ export async function listAuditLogs(
     });
   }
 
+  const where: Prisma.AuditLogWhereInput = {
+    ...(input.action ? { action: input.action } : {}),
+    // actor フィルタ: actorId 直接一致 または actor.email 部分一致
+    ...(input.actor
+      ? {
+          OR: [
+            { actorId: { equals: input.actor } },
+            { actor: { email: { contains: input.actor } } },
+          ],
+        }
+      : {}),
+    // at 範囲フィルタ
+    ...((input.from || input.to)
+      ? {
+          at: {
+            ...(input.from ? { gte: input.from } : {}),
+            ...(input.to ? { lte: input.to } : {}),
+          },
+        }
+      : {}),
+    // カーソルより古いレコード: at が cursor の at より小さい、
+    // または at が同じで id が cursor より小さい (辞書順)
+    ...(cursorRecord
+      ? {
+          OR: [
+            { at: { lt: cursorRecord.at } },
+            { at: cursorRecord.at, id: { lt: cursorRecord.id } },
+          ],
+        }
+      : {}),
+  };
+
+  // actor フィルタとカーソルフィルタが同時に OR 句を持つ場合は AND でラップする
+  const finalWhere: Prisma.AuditLogWhereInput =
+    input.actor && cursorRecord
+      ? {
+          AND: [
+            {
+              OR: [
+                { actorId: { equals: input.actor } },
+                { actor: { email: { contains: input.actor } } },
+              ],
+            },
+            {
+              OR: [
+                { at: { lt: cursorRecord.at } },
+                { at: cursorRecord.at, id: { lt: cursorRecord.id } },
+              ],
+            },
+            ...(input.action ? [{ action: input.action }] : []),
+            ...((input.from || input.to)
+              ? [
+                  {
+                    at: {
+                      ...(input.from ? { gte: input.from } : {}),
+                      ...(input.to ? { lte: input.to } : {}),
+                    },
+                  },
+                ]
+              : []),
+          ],
+        }
+      : where;
+
   const items = await prisma.auditLog.findMany({
-    where: {
-      ...(input.action ? { action: input.action } : {}),
-      // カーソルより古いレコード: at が cursor の at より小さい、
-      // または at が同じで id が cursor より小さい (辞書順)
-      ...(cursorRecord
-        ? {
-            OR: [
-              { at: { lt: cursorRecord.at } },
-              { at: cursorRecord.at, id: { lt: cursorRecord.id } },
-            ],
-          }
-        : {}),
-    },
+    where: finalWhere,
     orderBy: [{ at: "desc" }, { id: "desc" }],
     take: limit + 1, // 次ページ有無を判定するために 1 件余分に取得
     select: {

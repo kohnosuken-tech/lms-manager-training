@@ -61,7 +61,7 @@ export default async function SubmissionResultPage({
           href={`/courses/${test.courseId}`}
           className="text-sm text-muted-foreground hover:underline"
         >
-          ← {test.course.title}
+          ← {test.courseTitle}
         </Link>
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold">{test.title} の結果</h1>

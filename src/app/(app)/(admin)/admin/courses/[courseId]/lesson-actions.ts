@@ -11,7 +11,24 @@ import {
 } from "@/server/services/course";
 import { AppError } from "@/lib/errors";
 import { ok, err, type ApiResult } from "@/lib/result";
-import { isValidVideoUrl } from "@/lib/video-source";
+import { isValidVideoUrl, parseVideoSource } from "@/lib/video-source";
+import { fetchYouTubeMeta } from "@/lib/youtube-meta";
+
+/**
+ * videoUrl が YouTube かつ durationSec が 0 の場合のみ、
+ * YouTube watch ページから lengthSeconds を取得して上書きする。
+ * 取得失敗時はユーザー入力 (= 0) のまま返す。
+ */
+async function resolveDurationSec(
+  videoUrl: string,
+  durationSec: number,
+): Promise<number> {
+  if (durationSec > 0) return durationSec;
+  const source = parseVideoSource(videoUrl);
+  if (!source || source.type !== "YOUTUBE") return durationSec;
+  const meta = await fetchYouTubeMeta(videoUrl);
+  return meta?.durationSec ?? durationSec;
+}
 
 const VideoUrlSchema = z.string().refine(isValidVideoUrl, {
   message:
@@ -60,12 +77,16 @@ export async function createLessonAction(
   }
 
   try {
+    const durationSec = await resolveDurationSec(
+      parsed.data.videoUrl,
+      parsed.data.durationSec,
+    );
     await createLesson(actor.id, {
       courseId: parsed.data.courseId,
       title: parsed.data.title,
       description: parsed.data.description,
       videoUrl: parsed.data.videoUrl,
-      durationSec: parsed.data.durationSec,
+      durationSec,
       order: parsed.data.order,
       blockSeek: parsed.data.blockSeek === "on" || parsed.data.blockSeek === "true",
       requiredCompletionRate:
@@ -113,12 +134,17 @@ export async function updateLessonAction(
   });
   if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
   try {
+    const durationSec = await resolveDurationSec(
+      parsed.data.videoUrl,
+      parsed.data.durationSec,
+    );
     await updateLesson(actor.id, {
       id: parsed.data.id,
+      courseId: parsed.data.courseId,
       title: parsed.data.title,
       description: parsed.data.description,
       videoUrl: parsed.data.videoUrl,
-      durationSec: parsed.data.durationSec,
+      durationSec,
       order: parsed.data.order,
       blockSeek: parsed.data.blockSeek === "true",
       requiredCompletionRate:
@@ -150,7 +176,7 @@ export async function deleteLessonAction(
   });
   if (!parsed.success) return err("VALIDATION_FAILED", "入力値が不正です。");
   try {
-    await deleteLesson(actor.id, parsed.data.id);
+    await deleteLesson(actor.id, { id: parsed.data.id, courseId: parsed.data.courseId });
     revalidatePath(`/admin/courses/${parsed.data.courseId}`);
     return ok(null);
   } catch (e) {
@@ -181,12 +207,16 @@ export async function createLessonServerAction(formData: FormData) {
     throw new Error("入力値が不正です。");
   }
 
+  const durationSec = await resolveDurationSec(
+    parsed.data.videoUrl,
+    parsed.data.durationSec,
+  );
   await createLesson(actor.id, {
     courseId: parsed.data.courseId,
     title: parsed.data.title,
     description: parsed.data.description,
     videoUrl: parsed.data.videoUrl,
-    durationSec: parsed.data.durationSec,
+    durationSec,
     order: parsed.data.order,
     blockSeek: parsed.data.blockSeek === "on" || parsed.data.blockSeek === "true",
     requiredCompletionRate:

@@ -43,9 +43,9 @@ export function AdminShell({ children, user }: Props) {
       </div>
 
       {/* Main content */}
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
         {/* Top bar */}
-        <header className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4">
+        <header className="flex h-16 shrink-0 items-center justify-between bg-background/80 px-6 backdrop-blur-sm">
           <Button
             variant="ghost"
             size="icon-sm"
@@ -62,7 +62,7 @@ export function AdminShell({ children, user }: Props) {
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-6xl px-6 py-8">{children}</div>
+          <div className="mx-auto max-w-6xl px-6 pb-10 pt-2">{children}</div>
         </main>
       </div>
     </div>

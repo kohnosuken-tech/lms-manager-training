@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/server/auth";
 import { prisma } from "@/server/repositories/db";
+import { container } from "@/server/container";
 import {
   TestTaker,
   type TestTakerQuestion,
@@ -47,29 +48,6 @@ export default async function TakeTestPage({
 
   const submission = await prisma.submission.findUnique({
     where: { id: submissionId },
-    include: {
-      test: {
-        select: {
-          id: true,
-          title: true,
-          shuffleQuestions: true,
-          shuffleChoices: true,
-          questions: {
-            orderBy: { order: "asc" },
-            select: {
-              id: true,
-              type: true,
-              prompt: true,
-              order: true,
-              choices: {
-                orderBy: { order: "asc" },
-                select: { id: true, label: true, order: true },
-              },
-            },
-          },
-        },
-      },
-    },
   });
   if (!submission) notFound();
   if (submission.testId !== testId) notFound();
@@ -80,22 +58,27 @@ export default async function TakeTestPage({
     redirect(`/submissions/${submission.id}`);
   }
 
-  let questions = submission.test.questions.map((q) => ({
+  const test = await container.cms.getTest(submission.testId);
+  if (!test) notFound();
+  const cmsQuestions = await container.cms.listQuestions(test.id);
+  const cmsChoicesAll = await Promise.all(
+    cmsQuestions.map((q) => container.cms.listChoices(q.id)),
+  );
+
+  let questions = cmsQuestions.map((q, idx) => ({
     id: q.id,
     type: q.type,
-    prompt: q.prompt,
-    choices: q.choices.map((c) => ({ id: c.id, label: c.label })),
+    prompt: q.text,
+    choices: cmsChoicesAll[idx].map((c) => ({ id: c.id, label: c.text })),
   }));
 
-  if (submission.test.shuffleQuestions) {
-    questions = seededShuffle(questions, `${submissionId}:q`);
-  }
-  if (submission.test.shuffleChoices) {
-    questions = questions.map((q) => ({
-      ...q,
-      choices: seededShuffle(q.choices, `${submissionId}:${q.id}`),
-    }));
-  }
+  // CmsPort には shuffleQuestions / shuffleChoices フラグがない (Phase E で削除)
+  // 将来必要になったら CmsPort.Test 型に追加する。当面は Submission ID をシードに常時シャッフル。
+  questions = seededShuffle(questions, `${submissionId}:q`);
+  questions = questions.map((q) => ({
+    ...q,
+    choices: seededShuffle(q.choices, `${submissionId}:${q.id}`),
+  }));
 
   const renderQuestions: TestTakerQuestion[] = questions;
 
@@ -108,7 +91,7 @@ export default async function TakeTestPage({
         >
           ← テスト概要に戻る
         </Link>
-        <h1 className="text-2xl font-semibold">{submission.test.title}</h1>
+        <h1 className="text-2xl font-semibold">{test.title}</h1>
         <p className="text-sm text-muted-foreground">
           全 {questions.length} 問。提出後に解説が表示されます。
         </p>

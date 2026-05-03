@@ -5,6 +5,9 @@
  * このモジュールでは直接 PrismaClient を生成する。
  * サービス側の src/server/repositories/db.ts とは別インスタンスだが、
  * 同じ SQLite ファイルを参照するため resetDb() 後の変更はサービス側からも参照される。
+ *
+ * Phase E: Course / Lesson / Test / Question / Choice は Prisma から削除済み。
+ * resetDb() から該当テーブルの deleteMany 呼び出しを除去。
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -24,13 +27,8 @@ export const testPrisma = new PrismaClient({
 export async function resetDb(): Promise<void> {
   await testPrisma.answer.deleteMany();
   await testPrisma.submission.deleteMany();
-  await testPrisma.choice.deleteMany();
-  await testPrisma.question.deleteMany();
-  await testPrisma.test.deleteMany();
   await testPrisma.progress.deleteMany();
   await testPrisma.enrollment.deleteMany();
-  await testPrisma.lesson.deleteMany();
-  await testPrisma.course.deleteMany();
   await testPrisma.auditLog.deleteMany();
   await testPrisma.user.deleteMany();
 }
