@@ -1,9 +1,13 @@
 # 0005. GAS Web App を CMS 読取 + メール送信の統合リレーとして使う
 
-- Status: Accepted
+- Status: **Superseded by ADR 0006** (CMS 読取部分のみ)
 - Date: 2026-05-02
 - Author: architect subagent
 - Related: ADR 0001, ADR 0003 (Spreadsheet を CMS), ADR 0004 (RDB 残置), `docs/decisions.md` §4 (メール)
+
+> **2026-05-02 追記 (Superseded)**: CMS 読取機能 (`list_courses` 等) は ADR 0006 (Notion 全 DB 化) によって不要となり、GAS adapter は Phase G2 で削除される。
+>
+> ただし **メール送信機能 (`send_mail` action / `MailApp.sendEmail` リレー) は継続採用**。Notion でメール送信はできないため、GAS Mail Relay は LMS の MailPort 実装として残す (もしくは Phase 4 で Resend に切替)。詳細は `docs/architecture.md` §11.6 参照。
 
 ## Context
 

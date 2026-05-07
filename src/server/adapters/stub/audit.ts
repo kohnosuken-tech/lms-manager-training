@@ -44,11 +44,14 @@ export const stubAudit: AuditPort = {
       prevHash,
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await prisma.auditLog.create({
       data: {
         id,
         actorId: actorId ?? null,
-        action,
+        // Prisma enum cast: AuditPort.action は string だが Prisma は AuditAction enum を要求する
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        action: action as any,
         target: target ?? null,
         diff: diffStr,
         at: createdAt,

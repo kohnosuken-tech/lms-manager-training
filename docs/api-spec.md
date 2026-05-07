@@ -206,3 +206,84 @@ curl -sS -X POST "${GAS_WEBAPP_URL}?ts=${TS}&sig=${SIG}" \
 | `MAIL_DRIVER` | `console` \| `gas` \| `resend` | メール送信 driver |
 | `SPREADSHEET_ID` | (Google Sheets の ID) | (参考: GAS が `SpreadsheetApp.getActive()` で解決するため LMS 側では未使用) |
 
+---
+
+## 7. Notion API (LMS ⇔ Notion) — ADR 0006 (現行)
+
+> 2026-05-02 追加。ADR 0006 で全 DB を Notion に集約。本節が現行の外部 API 仕様。
+> §6 (GAS Web App) は **メール送信のみ** 継続。CMS 読取は Notion に置換。
+
+### 7.1 認証
+
+- SDK: `@notionhq/client` (Node)
+- env: `NOTION_TOKEN` (Internal Integration Token, `secret_xxx`)
+- 各 DB ID は env から注入 (`NOTION_DB_USER`, `NOTION_DB_COURSE` ... × 11)
+- LMS adapter (`src/server/adapters/notion/client.ts`) が token bucket rate limiter (3 req/s) を介してすべての呼出を gate
+
+### 7.2 操作マッピング (LMS API → Notion API)
+
+| LMS 操作 | Notion API | 備考 |
+| --- | --- | --- |
+| `listCourses()` | `databases.query({ database_id: NOTION_DB_COURSE })` + cursor ループ | 5 分キャッシュ |
+| `findUserByEmail(email)` | `databases.query({ filter: { property: "email", email: { equals } } })` | 30 秒キャッシュ。ユニーク制約代替 |
+| `createUser(input)` | `findUserByEmail` で重複チェック → `pages.create({ parent: { database_id }, properties })` | 衝突時は `CONFLICT` を返す |
+| `upsertProgress(userId, lessonId, watchedSec, lastPositionSec)` | **write queue 経由** で 30 秒バッファ → `pages.update` (既存) or `pages.create` (新規) | 高頻度書込はここを通す |
+| `createSubmission(...)` | `pages.create` (Submission) → 各 Answer ごとに `pages.create` | 原子的でない。失敗時は `Submission.status=ABANDONED` で補償 |
+| `appendAuditLog(entry)` | mutex 取得 → 直前 record を query → hash 計算 → `pages.create` | hash chain (architecture.md §11.4 (d)) |
+
+### 7.3 共通変換
+
+- Notion `rich_text` ⇔ string: `{ type: "text", text: { content } }` の配列で扱う。空文字列なら空配列
+- Notion `date` ⇔ ISO8601: `{ start: "2026-05-02T..." }`
+- Notion `select` ⇔ enum: `{ name: "STUDENT" }`
+- Notion `email` ⇔ string: `{ email: "foo@bar" }`
+- Notion `url` ⇔ string: `{ url: "https://..." }`
+- すべての DB の必須 `id` (cuid) は **rich_text プロパティ** として保存 (Notion page id とは別)
+
+### 7.4 エラーコード (Notion adapter)
+
+| code | 意味 |
+| --- | --- |
+| `NOTION_UNREACHABLE` | API 到達不能 |
+| `NOTION_RATE_LIMITED` | rate limiter 待機タイムアウト or Notion 429 |
+| `NOTION_NOT_FOUND` | 指定 id の page が存在しない |
+| `NOTION_PROPERTY_MISMATCH` | DB property name / type が想定と違う (起動時 schema 検証で検出) |
+| `NOTION_REMOTE_ERROR` | Notion API が 5xx を返した |
+| `CONFLICT` | アプリ層ユニーク (email 等) 衝突 |
+| `RATE_LIMITED` | LMS 側 token bucket 枯渇 |
+
+### 7.5 起動時 schema 検証
+
+Notion adapter は起動時 (lazy init) に **11 DB の property name と type を検証**:
+
+```ts
+// 例: NOTION_DB_USER に対し、"email" property が type=email で存在することを確認
+const db = await notion.databases.retrieve({ database_id: NOTION_DB_USER });
+assert(db.properties.email?.type === "email", "User.email must be 'email' type");
+```
+
+不一致なら `NOTION_PROPERTY_MISMATCH` で **起動失敗** させる (silent な書込壊滅を防ぐ)。
+
+### 7.6 環境変数 (LMS 側、Notion 化後)
+
+| 名前 | 例 | 用途 |
+| --- | --- | --- |
+| `DATA_DRIVER` | `notion` | adapter 切替 (default: `notion`) |
+| `NOTION_TOKEN` | `secret_xxxxx` | Internal Integration Token |
+| `NOTION_PARENT_PAGE_ID` | (32桁ハイフン無し) | 11 DB を配置する親ページ |
+| `NOTION_DB_USER` | (32桁) | User DB ID |
+| `NOTION_DB_COURSE` | (32桁) | |
+| `NOTION_DB_LESSON` | (32桁) | |
+| `NOTION_DB_TEST` | (32桁) | |
+| `NOTION_DB_QUESTION` | (32桁) | |
+| `NOTION_DB_CHOICE` | (32桁) | |
+| `NOTION_DB_ENROLLMENT` | (32桁) | |
+| `NOTION_DB_PROGRESS` | (32桁) | |
+| `NOTION_DB_SUBMISSION` | (32桁) | |
+| `NOTION_DB_ANSWER` | (32桁) | |
+| `NOTION_DB_AUDIT_LOG` | (32桁) | |
+| `MAIL_DRIVER` | `gas` (or `console`/`resend`) | メール送信先 (継続) |
+| `GAS_WEBAPP_URL`, `GAS_SECRET` | (継続) | メール送信用の GAS リレー (Notion で送信不可) |
+
+`DATABASE_URL` / `CMS_SOURCE*` / `SPREADSHEET_ID` は **削除** (Phase G2)。
+

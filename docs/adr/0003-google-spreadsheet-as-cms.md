@@ -1,10 +1,12 @@
 # 0003. Course / Lesson / Test 定義データの CMS に Google Spreadsheet (GAS Web App 経由) を採用する
 
-- Status: Accepted
+- Status: **Superseded by ADR 0006** (2026-05-02)
 - Date: 2026-05-02
 - Author: architect subagent
 - Related: ADR 0001 (mock-first), ADR 0004 (リレーショナル DB に残すエンティティ), ADR 0005 (GAS Web App をリレー基盤として採用)
 - Supersedes: 内部レビューで一時採択していた「Notion を CMS に使う案 (案 C)」を破棄し、本 ADR で置き換える。
+
+> **2026-05-02 追記 (Superseded)**: 社内合意により Spreadsheet → Notion へ全面移行することが決定。本 ADR は ADR 0006 によって完全に置き換えられた。CMS 系 (Course/Lesson/Test/Question/Choice) は Notion DB として再定義される。Spreadsheet/GAS は Phase G 完了で停止する (移行プランは `docs/architecture.md` §11 参照)。
 
 ## Context
 

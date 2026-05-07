@@ -7,6 +7,11 @@ import type { LoggerPort } from "./ports/logger";
 import type { MailPort } from "./ports/mail";
 import type { StoragePort } from "./ports/storage";
 import type { CmsPort } from "./ports/cms";
+import type { UserPort } from "./ports/users";
+import type { EnrollmentPort } from "./ports/enrollment";
+import type { ProgressPort } from "./ports/progress";
+import type { SubmissionPort } from "./ports/submission";
+import type { AnswerPort } from "./ports/answer";
 
 import { stubAuth } from "./adapters/stub/auth";
 import { stubAudit } from "./adapters/stub/audit";
@@ -18,7 +23,19 @@ import { localCms } from "./adapters/local/cms";
 import { spreadsheetCms } from "./adapters/spreadsheet/cms";
 import { gasMail } from "./adapters/spreadsheet/mail";
 
+import { notionCms } from "./adapters/notion/cms";
+import { notionUsers } from "./adapters/notion/users";
+import { notionEnrollment } from "./adapters/notion/enrollment";
+import { notionProgress } from "./adapters/notion/progress";
+import { notionSubmission } from "./adapters/notion/submission";
+import { notionAnswer } from "./adapters/notion/answer";
+import { notionAudit } from "./adapters/notion/audit";
+
 const mode = process.env.APP_MODE ?? "stub";
+
+// DATA_DRIVER: "notion" | "sqlite-spreadsheet" (default)
+const dataDriver = process.env.DATA_DRIVER ?? "sqlite-spreadsheet";
+
 // "local" (default) | "spreadsheet"
 // "sqlite" は deprecated (後方互換で "local" と同義。起動時に warning ログを出す)
 const cmsSource = process.env.CMS_SOURCE ?? "local";
@@ -31,15 +48,18 @@ export type Container = {
   mail: MailPort;
   storage: StoragePort;
   cms: CmsPort;
+  // 新規 ports (Notion adapter で実装。sqlite-spreadsheet モードでは null)
+  users: UserPort | null;
+  enrollment: EnrollmentPort | null;
+  progress: ProgressPort | null;
+  submission: SubmissionPort | null;
+  answer: AnswerPort | null;
 };
 
 /**
  * prod アダプタが未実装の間は throw する placeholder を生成する。
  * APP_MODE=prod で立ち上げると各アダプタへの最初のアクセス時に落ちるため
  * silent fail を防ぐ (Critical 指摘 H-2 対応)。
- *
- * Phase 4 で Vercel 環境変数が整ったら各 placeholder を
- * src/server/adapters/prod/* の実装に差し替える。
  */
 function notImplementedAdapter<T extends object>(name: string): T {
   return new Proxy({} as T, {
@@ -61,33 +81,65 @@ if (cmsSource === "sqlite") {
   );
 }
 
-const cms: CmsPort =
-  cmsSource === "spreadsheet" ? spreadsheetCms : localCms;
+function buildContainer(): Container {
+  // ---------- notion モード ----------
+  if (dataDriver === "notion") {
+    const notionMail: MailPort = mailDriver === "gas" ? gasMail : stubMail;
+    return {
+      auth:       mode === "prod" ? notImplementedAdapter<AuthPort>("auth") : stubAuth,
+      audit:      notionAudit,
+      logger:     mode === "prod" ? notImplementedAdapter<LoggerPort>("logger") : stubLogger,
+      mail:       notionMail,
+      storage:    mode === "prod" ? notImplementedAdapter<StoragePort>("storage") : stubStorage,
+      cms:        notionCms,
+      users:      notionUsers,
+      enrollment: notionEnrollment,
+      progress:   notionProgress,
+      submission: notionSubmission,
+      answer:     notionAnswer,
+    };
+  }
 
-const mail: MailPort =
-  mode === "prod"
-    ? notImplementedAdapter<MailPort>("mail")
-    : mailDriver === "gas"
-      ? gasMail
-      : stubMail;
+  // ---------- sqlite-spreadsheet モード (既存 / デフォルト) ----------
+  const cms: CmsPort =
+    cmsSource === "spreadsheet" ? spreadsheetCms : localCms;
 
-const prodContainer: Container = {
-  auth: notImplementedAdapter<AuthPort>("auth"),
-  audit: notImplementedAdapter<AuditPort>("audit"),
-  logger: notImplementedAdapter<LoggerPort>("logger"),
-  mail: notImplementedAdapter<MailPort>("mail"),
-  storage: notImplementedAdapter<StoragePort>("storage"),
-  cms,
-};
+  const mail: MailPort =
+    mode === "prod"
+      ? notImplementedAdapter<MailPort>("mail")
+      : mailDriver === "gas"
+        ? gasMail
+        : stubMail;
 
-export const container: Container =
-  mode === "prod"
-    ? prodContainer
-    : {
-        auth: stubAuth,
-        audit: stubAudit,
-        logger: stubLogger,
-        mail,
-        storage: stubStorage,
-        cms,
-      };
+  if (mode === "prod") {
+    return {
+      auth:       notImplementedAdapter<AuthPort>("auth"),
+      audit:      notImplementedAdapter<AuditPort>("audit"),
+      logger:     notImplementedAdapter<LoggerPort>("logger"),
+      mail:       notImplementedAdapter<MailPort>("mail"),
+      storage:    notImplementedAdapter<StoragePort>("storage"),
+      cms,
+      users:      null,
+      enrollment: null,
+      progress:   null,
+      submission: null,
+      answer:     null,
+    };
+  }
+
+  return {
+    auth:       stubAuth,
+    audit:      stubAudit,
+    logger:     stubLogger,
+    mail,
+    storage:    stubStorage,
+    cms,
+    users:      null,
+    enrollment: null,
+    progress:   null,
+    submission: null,
+    answer:     null,
+  };
+}
+
+export const container: Container = buildContainer();

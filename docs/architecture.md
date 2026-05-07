@@ -830,3 +830,342 @@ DROP TYPE IF EXISTS "QuestionType";
 
 ロールバック: SQL を逆順に実行する代わりに、Phase E 直前の `pg_dump` を取得して restore。
 
+---
+
+## 11. Notion を唯一の DB として採用 — ADR 0006 (現行)
+
+> 2026-05-02 改定。ADR 0003〜0005 (Spreadsheet=CMS / RDB=書込系 構成) は **ADR 0006 によって完全に置き換えられた**。
+> 本節が現行の構成。§8〜§10 は歴史的記録として残す。
+
+### 11.1 ランタイム配置
+
+```
+[ Browser ]
+    | HTTPS
+    v
+[ Vercel Edge Network ]  -- BotID (login pages)
+    |
+    v (Fluid Compute, Node.js 24)
++-------------------------------------------+
+| Next.js App Router                        |
+|  - Server Components (一覧/集計の描画)     |
+|  - Server Actions  (フォーム送信)          |
+|  - Route Handlers  (/api/progress, cron)  |
+|  - In-memory cache + write queue          |
+|  - Token bucket rate limiter (3 req/s)    |
++-------------------------------------------+
+   |              |                   |
+   v              v                   v
+[ Clerk ]   [ Notion API ]      [ Vercel Blob ] (動画)
+            (11 DB,
+             @notionhq/client)
+                                [ GAS Mail Relay ] (送信のみ。Phase 4 で Resend 候補)
+```
+
+ポイント:
+- **Prisma / Neon / Spreadsheet は不要**。Notion API のみが LMS のデータソース
+- 11 個の Notion DB を Integration が読み書きする
+- Vercel Function 内 in-memory で **write queue** + **read cache** を持つ
+- メール送信のみ GAS リレーを継続 (Notion で送信不可のため)
+
+### 11.2 ports & adapters の更新
+
+```
+src/server/
+├── ports/
+│   ├── auth.ts        (既存)
+│   ├── mail.ts        (既存)
+│   ├── storage.ts     (既存)
+│   ├── logger.ts      (既存)
+│   ├── cms.ts         (既存 → Notion adapter で実装)
+│   ├── repositories.ts (NEW) — User/Enrollment/Progress/Submission/Answer/AuditLog の port
+│   └── audit.ts       (NEW or 既存) — AuditLog 専用 (hash chain)
+├── adapters/
+│   ├── stub/          (既存。dev/test 用 in-memory)
+│   └── notion/        (NEW、本番)
+│       ├── client.ts        — @notionhq/client 初期化 + rate limiter
+│       ├── rate-limiter.ts  — 3 req/s token bucket
+│       ├── cache.ts         — TTL 別 in-memory cache (5min / 30s / none)
+│       ├── write-queue.ts   — Progress 用 30 秒バッファ
+│       ├── cms.ts           — Course/Lesson/Test/Question/Choice
+│       ├── user.ts          — User CRUD + email lookup
+│       ├── enrollment.ts
+│       ├── progress.ts      — write は queue 経由
+│       ├── submission.ts    — Submission + Answer (best-effort tx)
+│       ├── audit-log.ts     — hash chain 計算 + write
+│       └── property-mapper.ts — Notion property ⇔ DTO の変換
+```
+
+`src/server/container.ts`:
+
+| `process.env.DATA_DRIVER` | 解決先 |
+| --- | --- |
+| `"stub"` (dev/test) | in-memory stub adapter |
+| `"notion"` (default for prod) | Notion adapter (全 11 DB) |
+
+`MAIL_DRIVER`:
+| 値 | 実装 |
+| --- | --- |
+| `console` (dev) | console.log |
+| `gas` (現行本番候補) | GAS `send_mail` action (ADR 0005 の継続部分) |
+| `resend` (Phase 4) | Resend SDK |
+
+### 11.3 Notion DB スキーマ (11 個)
+
+各 DB の **property 一覧 + Notion type**。すべての DB に **`id` (rich_text, cuid)** と **`createdAt` / `updatedAt` (date, ISO8601)** を持たせる。Notion page id は使わない。
+
+#### CMS 系 (5 個)
+
+##### `Course`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | cuid |
+| `title` | title | ○ | Notion 必須の title プロパティを兼ねる |
+| `description` | rich_text | × | |
+| `order` | number | ○ | 0 以上 |
+| `published` | checkbox | ○ | |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+##### `Lesson`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `title` | title | ○ | |
+| `courseId` | rich_text | ○ | Course.id 参照 (relation 不使用) |
+| `description` | rich_text | × | |
+| `videoUrl` | url | ○ | Vercel Blob URL or YouTube |
+| `durationSec` | number | ○ | |
+| `order` | number | ○ | |
+| `blockSeek` | checkbox | ○ | |
+| `requiredCompletionRate` | number | × | 空 → 0.95 |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+##### `Test`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `title` | title | ○ | |
+| `courseId` | rich_text | ○ | |
+| `prerequisiteCourseId` | rich_text | × | 受講条件 |
+| `passingScore` | number | ○ | 0〜100 |
+| `maxAttempts` | number | ○ | 1 以上 |
+| `published` | checkbox | ○ | |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+##### `Question`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `text` | title | ○ | 設問文を title に格納 |
+| `testId` | rich_text | ○ | |
+| `order` | number | ○ | |
+| `type` | select | ○ | `SINGLE` / `MULTIPLE` |
+| `explanation` | rich_text | × | |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+##### `Choice`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `text` | title | ○ | |
+| `questionId` | rich_text | ○ | |
+| `order` | number | ○ | |
+| `isCorrect` | checkbox | ○ | |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+#### アプリ系 (6 個)
+
+##### `User`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | cuid |
+| `name` | title | ○ | |
+| `email` | email | ○ | Notion の email type を使用。ユニーク制約は LMS 側で担保 |
+| `role` | select | ○ | `STUDENT` / `ADMIN` |
+| `passwordHash` | rich_text | × | mock 期のみ。本番 Clerk 切替後は空 |
+| `clerkUserId` | rich_text | × | Phase 4 で Clerk 統合時 |
+| `sessionVersion` | number | ○ | 既定 0 |
+| `deactivated` | checkbox | ○ | |
+| `createdAt` | date | ○ | |
+| `updatedAt` | date | ○ | |
+
+##### `Enrollment`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `name` | title | ○ | `${userId}:${courseId}` 等の自動生成 (Notion title 必須対応) |
+| `userId` | rich_text | ○ | |
+| `courseId` | rich_text | ○ | |
+| `assignedAt` | date | ○ | |
+| `dueAt` | date | × | |
+| `completedAt` | date | × | |
+
+`(userId, courseId)` のユニーク制約は LMS 側 lookup で担保。
+
+##### `Progress`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `name` | title | ○ | `${userId}:${lessonId}` |
+| `userId` | rich_text | ○ | |
+| `lessonId` | rich_text | ○ | |
+| `watchedSec` | number | ○ | |
+| `lastPositionSec` | number | ○ | |
+| `completed` | checkbox | ○ | |
+| `completedAt` | date | × | |
+| `updatedAt` | date | ○ | |
+
+書込は **write queue 経由** で 30 秒バッファ。
+
+##### `Submission`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `name` | title | ○ | `${userId}:${testId}:#${attemptNo}` |
+| `userId` | rich_text | ○ | |
+| `testId` | rich_text | ○ | |
+| `status` | select | ○ | `IN_PROGRESS` / `PASSED` / `FAILED` / `ABANDONED` |
+| `score` | number | × | 0〜100 |
+| `attemptNo` | number | ○ | |
+| `startedAt` | date | ○ | |
+| `submittedAt` | date | × | |
+
+##### `Answer`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `name` | title | ○ | `${submissionId}:${questionId}` |
+| `submissionId` | rich_text | ○ | |
+| `questionId` | rich_text | ○ | |
+| `choiceId` | rich_text | × | 複数選択は `,` 区切りでも別レコード化でも可。設計は **複数行** に統一 (1 row = 1 choice) |
+| `createdAt` | date | ○ | |
+
+##### `AuditLog`
+| property | type | 必須 | 備考 |
+| --- | --- | --- | --- |
+| `id` | rich_text | ○ | |
+| `name` | title | ○ | `${action}:${target}` |
+| `actorId` | rich_text | ○ | userId |
+| `action` | rich_text | ○ | enum 文字列 (例: `USER_CREATE`) |
+| `target` | rich_text | ○ | `${entity}:${id}` |
+| `diff` | rich_text | × | JSON 文字列 (2000 字以内に切詰) |
+| `prevHash` | rich_text | × | 直前 record の hash。最初は `genesis` |
+| `hash` | rich_text | ○ | sha256(`prevHash` + `actorId` + `action` + `target` + `diff` + `at`) |
+| `at` | date | ○ | |
+
+### 11.4 性能緩和策の実装方針
+
+#### (a) 書込スロットル (`rate-limiter.ts`)
+- token bucket: 容量 5、補充 3/sec
+- 全 Notion API 呼出 (read 含む) を `await limiter.acquire()` で gate
+- 待ち超過 (>5s) 時は `RATE_LIMITED` を返す
+
+#### (b) Progress 書込キュー (`write-queue.ts`)
+- `Map<"${userId}:${lessonId}", PendingProgress>` を Function 内 in-memory に保持
+- 受信時: Map に最新値を上書き
+- 30 秒タイマー or サイズ閾値 (50 件) で flush → Notion へ batch update
+- **失敗時は次回 flush でリトライ**。3 回連続失敗で `lastError` を AuditLog に記録
+- ベストエフォート: Function 再起動でロスト → クライアント localStorage が補完
+
+#### (c) 読込キャッシュ (`cache.ts`)
+```ts
+type Tier = "long" | "short" | "none";
+const TTL: Record<Tier, number> = { long: 5*60_000, short: 30_000, none: 0 };
+```
+| エンティティ | tier |
+| --- | --- |
+| Course / Lesson / Test / Question / Choice | long |
+| User / Enrollment | short |
+| Progress / Submission / Answer / AuditLog | none |
+
+key 例: `"course:list"`, `"lesson:list:courseId=xxx"`, `"user:byEmail:foo@bar"`
+
+#### (d) AuditLog hash chain
+```
+1. lock = mutex.acquire("audit-log")  // Function 内 in-memory mutex
+2. last = notion.query(AuditLog, sort=createdAt desc, limit=1)
+3. prevHash = last?.hash ?? "genesis"
+4. hash = sha256(prevHash + actorId + action + target + diff + at)
+5. notion.create({ ..., prevHash, hash })
+6. lock.release()
+```
+
+複数 Function インスタンス間の同時書込はベストエフォート (再計算を許容)。`scripts/verify-audit-chain.ts` を Notion 対応版に backend が書換予定。
+
+### 11.5 個人 Notion → 会社 Notion 切替戦略
+
+env 変更だけで切替えられる設計:
+
+1. **会社 Notion ワークスペース** で Integration を作成 (個人と同じ権限)
+2. 親ページを作成し、Integration を共有
+3. **個人 Notion で使った 11 DB と同じ property** を会社 Notion に作る
+   - 推奨: `scripts/notion-setup.ts` (将来作成) を会社 workspace で実行 → 11 DB 自動生成
+   - 手動でも可 (property 名・type が一致していればよい)
+4. 各 DB の ID を取得 (URL の `?v=...` 直前のハイフン区切り 32 桁)
+5. Vercel env を **書き換える** (`NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`, `NOTION_DB_*` 11 個)
+6. 再デプロイ → 会社 Notion 接続完了
+
+**データ移行 (任意)**:
+- `scripts/notion-export.ts` (将来): 個人 Notion から全レコードを JSONL に export
+- `scripts/notion-import.ts` (将来): JSONL を会社 Notion に import
+- 移行不要なら個人テストデータは破棄、会社で seed から作り直し
+
+### 11.6 既存 Spreadsheet/GAS の扱い
+
+| 機能 | 扱い | Phase |
+| --- | --- | --- |
+| Spreadsheet (CMS) | **段階的廃止**。Phase G2 で adapter 削除、Phase G4 後に Spreadsheet 自体を削除可能 | G2〜G4 |
+| `gas/seed-data/*.tsv` | **保持**。Notion 投入用 seed の元データとして使う | 継続 |
+| GAS `list_*` action | **削除**。Notion adapter で代替 | G2 |
+| GAS `send_mail` action | **継続採用** (Notion でメール送信不可のため) | 継続。Phase 4 で Resend 切替を検討 |
+| Prisma / SQLite / Neon | **削除**。`prisma/` ディレクトリ + `DATABASE_URL` env を撤廃 | G2 |
+
+メール送信を **GAS のまま続けるか Resend にするか** の判断:
+- 現実解: **GAS Mail Relay を Phase G では維持** (動作確認済、ドメイン認証不要)
+- Phase 4 で送信量増加・テンプレート要件があれば Resend に切替 (MailPort 差替えのみ)
+
+### 11.7 Vercel デプロイ仕様 (Notion 化後)
+
+| 設定 | 値 |
+| --- | --- |
+| `DATABASE_URL` | **不要** (削除) |
+| Prisma generate | **不要** (Phase G2 で `prisma/` 撤廃) |
+| `prisma migrate deploy` | **不要** |
+| 必須 env | `NOTION_TOKEN`, `NOTION_PARENT_PAGE_ID`, `NOTION_DB_*` × 11 |
+| Optional env | `GAS_WEBAPP_URL`, `GAS_SECRET` (メール送信維持時), `MAIL_DRIVER`, `DATA_DRIVER=notion` |
+| build command | `next build` のみ |
+| Region | `hnd1` (東京、既存設定維持) |
+
+### 11.8 移行プラン (Phase F〜G)
+
+| Phase | 内容 | 担当 |
+| --- | --- | --- |
+| F | architect が ADR 0006 + 本節 + `notion-setup.md` を作成 | architect (本タスク) |
+| G1 | ユーザーが個人 Notion で Integration 作成、親ページ作成、`scripts/notion-setup.ts` 実行で 11 DB 自動生成 | ユーザー (手順は `docs/notion-setup.md`) |
+| G2 | backend が `src/server/adapters/notion/*` を実装 (rate-limiter, cache, write-queue, 11 DB の CRUD)。Spreadsheet/Prisma adapter を撤廃 | backend |
+| G3 | qa が Notion adapter の動作確認 (ローカル個人 Notion 接続、E2E) | qa |
+| G4 | devops が Vercel に env 設定 → preview デプロイ → 本番デプロイ | devops |
+| G5 | 会社 Notion 整備後、env 11 個を差替えて再デプロイ (5 分作業) | devops |
+
+各 Phase の完了基準:
+- **G1**: Notion 上で 11 DB が見える + Integration が接続済
+- **G2**: ローカルで `pnpm dev` 起動 → ログイン → コース閲覧 → 進捗が Notion に反映される
+- **G3**: E2E グリーン
+- **G4**: 個人 Notion 接続の本番 URL でテストユーザーが操作できる
+- **G5**: 会社 Notion 接続後、同じテストユーザーで操作確認
+
+### 11.9 「rate limit と妥協で耐えられない部分」の明示
+
+| シナリオ | 可否 | 理由 |
+| --- | --- | --- |
+| 30 名同時動画視聴 + 10 秒間隔 progress | **可** | 30 秒バッファで実 write は 1/30s ≒ 0.03 req/s |
+| 100 名同時動画視聴 | **不可** | バッファ後でも write が 3 req/s に近づきバースト超過。`rate-limiter` で詰まる |
+| 50 名同時テスト受験 (Submission + Answer 30 件 = 31 write) | **可だが遅い** | 50 × 31 = 1550 write を 3 req/s で消化 ≒ 8 分。受験者には「採点中…」表示で待たせる |
+| ADMIN 一括割当 100 名 × 5 コース = 500 行 | **可だが遅い** | 約 3 分。バックグラウンドジョブ化を検討 |
+| ダッシュボード集計 (User/Enrollment/Progress を全件 join) | **可だが遅い** | 数千 record で 数秒。5 分キャッシュで吸収 |
+| AuditLog に毎秒数十書込 | **不可** | Notion で受け切れない。AuditLog は重要操作に限定 |

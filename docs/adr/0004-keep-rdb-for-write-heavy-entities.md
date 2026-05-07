@@ -1,9 +1,11 @@
 # 0004. User / Progress / Submission / AuditLog はリレーショナル DB に残す
 
-- Status: Accepted
+- Status: **Superseded by ADR 0006** (2026-05-02)
 - Date: 2026-05-02
 - Author: architect subagent
 - Related: ADR 0001 (mock-first), ADR 0003 (Spreadsheet を CMS), ADR 0005 (GAS Web App リレー)
+
+> **2026-05-02 追記 (Superseded)**: ADR 0006 で全データを Notion に集約することが決定。本 ADR で「RDB に残す」とした User/Enrollment/Progress/Submission/Answer/AuditLog はすべて Notion DB へ移行する (Phase G2)。性能上の妥協 (rate limit, トランザクション欠如等) と緩和策は ADR 0006 を参照。
 
 ## Context
 
