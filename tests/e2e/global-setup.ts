@@ -11,7 +11,9 @@ const ROOT = path.resolve(__dirname, "../..");
 export default async function globalSetup() {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    DATABASE_URL: "file:./test.db",
+    DATABASE_URL:
+      process.env["DATABASE_URL"] ??
+      "postgresql://postgres:postgres@localhost:5432/lms_test",
     NODE_ENV: "test" as const,
   };
 

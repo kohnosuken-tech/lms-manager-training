@@ -8,11 +8,14 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./tests/setup.ts"],
-    // 複数テストファイルが同一 SQLite test.db を共有するため直列実行する
+    // 複数テストファイルが同一 Postgres test DB を共有するため直列実行する
     fileParallelism: false,
     env: {
-      DATABASE_URL: "file:./test.db",
-      SESSION_SECRET: "test-secret-for-vitest-at-least-16-chars",
+      // Postgres URL は CI / ローカルで個別に上書き。事前に prisma db push が必要。
+      DATABASE_URL:
+        process.env["DATABASE_URL"] ??
+        "postgresql://postgres:postgres@localhost:5432/lms_test",
+      SESSION_SECRET: "test-secret-for-vitest-at-least-32-chars-long",
       NODE_ENV: "test",
     },
     include: [

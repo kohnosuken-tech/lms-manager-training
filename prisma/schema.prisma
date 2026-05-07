@@ -1,11 +1,11 @@
 // LMS — Prisma schema
 //
 // Notes:
-// - モックでは provider = "sqlite" を採用 (DATABASE_URL=file:./dev.db)。
-//   本番切替時は provider を "postgresql" に変更し DATABASE_URL を Neon に向ける。
+// - **Postgres** を本番 / 開発両方で採用 (Vercel Postgres / Neon)。
+//   ローカルでも Postgres URL を使う。SQLite は Sprint #6 まで使っていたが Vercel 化で廃止。
 // - 互換性のため Json 型は使用しない (文字列 + zod パース)。@db.* も付けない。
 // - 主要な検索パスに合わせて複合インデックスを定義済み。
-// - Phase E: Course / Lesson / Test / Question / Choice は CmsPort (TSV fixture) へ移行。
+// - Phase E: Course / Lesson / Test / Question / Choice は CmsPort (TSV fixture / Spreadsheet / Notion) へ移行。
 //   Enrollment / Progress / Submission / Answer の courseId / lessonId / testId / questionId /
 //   choiceId は string FK として保持 (Prisma relation は不要)。
 
@@ -14,7 +14,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
