@@ -37,12 +37,6 @@ const nextConfig: NextConfig = {
   // X-Powered-By: Next.js ヘッダを削除 (情報漏洩対策)
   poweredByHeader: false,
 
-  // ESLint 10 ↔ @eslint/eslintrc 3.3.5 の循環参照バグで build がコケるため除外。
-  // 型チェックは tsc で別途実施。
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-
   async headers() {
     return [
       {
